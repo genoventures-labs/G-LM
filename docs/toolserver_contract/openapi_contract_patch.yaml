@@ -1,0 +1,126 @@
+openapi: 3.1.0
+info:
+  title: G-LM Tool Server Contract Patch
+  version: v1-contract
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: APIKey
+
+  schemas:
+    ProblemError:
+      type: object
+      required: [status, title, detail, trace_id]
+      additionalProperties: false
+      properties:
+        status:
+          type: integer
+        title:
+          type: string
+        detail:
+          type: string
+        trace_id:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    AuthError:
+      allOf:
+        - $ref: '#/components/schemas/ProblemError'
+
+    ValidationError:
+      allOf:
+        - $ref: '#/components/schemas/ProblemError'
+
+    RateLimitError:
+      allOf:
+        - $ref: '#/components/schemas/ProblemError'
+
+    VectorRetrieveInput:
+      type: object
+      required: [query, namespace]
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          minLength: 1
+        namespace:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{1,63}$'
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 8
+        filters:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: integer
+              - type: boolean
+              - type: 'null'
+
+paths:
+  /tools/web_search:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-Client-Id
+          required: true
+          schema:
+            type: string
+  /tools/fetch_url:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-Client-Id
+          required: true
+          schema:
+            type: string
+  /tools/http_request:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-Client-Id
+          required: true
+          schema:
+            type: string
+  /tools/vector_retrieve:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-Client-Id
+          required: true
+          schema:
+            type: string
+  /tools/code_exec_sandbox:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: X-Client-Id
+          required: true
+          schema:
+            type: string

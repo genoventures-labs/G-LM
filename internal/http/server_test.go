@@ -22,6 +22,8 @@ type fakeUpstream struct {
 	listCalls      int
 	lastModelUsed  string
 	lastRequest    model.ChatCompletionRequest
+	responseText   string
+	enableToolLoop bool
 	failMCTS       bool
 	failMultiAgent bool
 	failDirect     bool
@@ -91,19 +93,74 @@ func (f *fakeUpstream) ChatCompletions(ctx context.Context, req model.ChatComple
 	}
 	f.lastModelUsed = req.Model
 	f.lastRequest = req
+	if f.enableToolLoop && len(req.Tools) > 0 {
+		hasToolMessage := false
+		for _, m := range req.Messages {
+			if m.Role == "tool" {
+				hasToolMessage = true
+				break
+			}
+		}
+		if !hasToolMessage {
+			resp := model.ChatCompletionResponse{Model: req.Model}
+			resp.Choices = []struct {
+				Index   int `json:"index"`
+				Message struct {
+					Role      string           `json:"role"`
+					Content   string           `json:"content"`
+					Name      string           `json:"name,omitempty"`
+					ToolCalls []model.ToolCall `json:"tool_calls,omitempty"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason,omitempty"`
+			}{
+				{
+					Index: 0,
+					Message: struct {
+						Role      string           `json:"role"`
+						Content   string           `json:"content"`
+						Name      string           `json:"name,omitempty"`
+						ToolCalls []model.ToolCall `json:"tool_calls,omitempty"`
+					}{
+						Role:    "assistant",
+						Content: "",
+						ToolCalls: []model.ToolCall{
+							{
+								ID:   "call_1",
+								Type: "function",
+								Function: model.ToolFunctionCall{
+									Name:      "web_search",
+									Arguments: `{"query":"dns"}`,
+								},
+							},
+						},
+					},
+					FinishReason: "tool_calls",
+				},
+			}
+			return resp, nil
+		}
+	}
 	resp := model.ChatCompletionResponse{Model: req.Model}
+	content := "<thought>secret</thought><answer>safe</answer>"
+	if f.responseText != "" {
+		content = f.responseText
+	}
 	resp.Choices = []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string           `json:"role"`
+			Content   string           `json:"content"`
+			Name      string           `json:"name,omitempty"`
+			ToolCalls []model.ToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason,omitempty"`
 	}{
 		{Index: 0, Message: struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		}{Role: "assistant", Content: "<thought>secret</thought><answer>safe</answer>"}},
+			Role      string           `json:"role"`
+			Content   string           `json:"content"`
+			Name      string           `json:"name,omitempty"`
+			ToolCalls []model.ToolCall `json:"tool_calls,omitempty"`
+		}{Role: "assistant", Content: content}},
 	}
 	return resp, nil
 }
@@ -153,6 +210,10 @@ func setupServerWithTenant(t *testing.T) (*Server, string, string, string, *fake
 		MemoryUpdateConceptsPerTurn:      6,
 		StyleContractEnabled:             true,
 		StyleContractVersion:             "v1",
+		SymbolicOverlayEnabled:           true,
+		SymbolicOverlayMaxSymbols:        48,
+		SymbolicOverlayMaxDocChars:       12000,
+		SymbolicOverlayStrictCheck:       true,
 		MetaReasoningEnabled:             true,
 		MetaReasoningDefaultProfile:      "default",
 		MetaReasoningAcceptThreshold:     0.72,
@@ -179,6 +240,82 @@ func setupServer(t *testing.T) (*Server, string, string, *fakeUpstream) {
 	t.Helper()
 	srv, adminKey, runtimeKey, _, up := setupServerWithTenant(t)
 	return srv, adminKey, runtimeKey, up
+}
+
+func setupServerCustom(t *testing.T, up *fakeUpstream, override func(*config.Config)) (*Server, string, string, string, *fakeUpstream) {
+	t.Helper()
+	st := memory.New()
+	if up == nil {
+		up = &fakeUpstream{models: []string{"mistral:7b", "qwen3:4b", "llama3.2:1b", "qwen2.5:3b-instruct", "phi3:mini", "gemma2:2b"}}
+	}
+	cfg := config.Config{
+		DefaultModel:                     "mistral:7b",
+		RateLimitRPM:                     100,
+		ReasoningHiddenByDefault:         true,
+		OrchestratorEnabled:              true,
+		OrchestratorDefaultModel:         "qwen3-8b-instruct-Q4_K_M",
+		OrchestratorAliases:              []string{"qwen3-8b-instruct-Q4_K_M", "qwen3:8b", "qwen3-8b", "qwen3_8b_instruct_q4_k_m"},
+		OrchestratorFallback:             "qwen3:4b",
+		EmotionalModulationEnabled:       true,
+		ReasoningPipelineEnabled:         true,
+		ReasoningPipelineDefaultBranches: 3,
+		ReasoningPipelineMaxBranches:     5,
+		MCTSEnabled:                      true,
+		MCTSDefaultRollouts:              6,
+		MCTSMaxRollouts:                  12,
+		MCTSDefaultDepth:                 3,
+		MCTSMaxDepth:                     4,
+		MCTSDefaultExploration:           1.2,
+		MCTSStageTimeout:                 10 * time.Second,
+		MCTSFailOpen:                     true,
+		MultiAgentEnabled:                true,
+		MultiAgentMaxAgents:              4,
+		MultiAgentMaxRounds:              2,
+		MultiAgentStageTimeout:           10 * time.Second,
+		MultiAgentBudgetTokens:           1200,
+		MultiAgentFailOpen:               true,
+		IntentPreprocessorEnabled:        true,
+		IntentAmbiguityThreshold:         0.62,
+		DocumentOrchestrationEnabled:     true,
+		DocumentChunkSize:                512,
+		DocumentMaxDocuments:             8,
+		DocumentMaxChunksPerDoc:          8,
+		DocumentMaxLinks:                 12,
+		MemoryDynamicsEnabled:            true,
+		MemoryHalfLifeHours:              168,
+		MemoryReplayThreshold:            0.68,
+		MemoryFreshnessWindowHours:       72,
+		MemoryContextNodeLimit:           5,
+		MemoryUpdateConceptsPerTurn:      6,
+		StyleContractEnabled:             true,
+		StyleContractVersion:             "v1",
+		SymbolicOverlayEnabled:           true,
+		SymbolicOverlayMaxSymbols:        48,
+		SymbolicOverlayMaxDocChars:       12000,
+		SymbolicOverlayStrictCheck:       true,
+		MetaReasoningEnabled:             true,
+		MetaReasoningDefaultProfile:      "default",
+		MetaReasoningAcceptThreshold:     0.72,
+		MetaReasoningStrictThreshold:     0.82,
+	}
+	if override != nil {
+		override(&cfg)
+	}
+	srv := NewServer(cfg, st, up)
+	a := auth.NewService(st)
+	tenant, err := st.CreateTenant(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminKey, _, err := a.GenerateAPIKey(context.Background(), tenant.ID, []string{"admin:*", "runtime:*"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeKey, _, err := a.GenerateAPIKey(context.Background(), tenant.ID, []string{"runtime:*"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, adminKey, runtimeKey, tenant.ID, up
 }
 
 func TestChatCompletionStripsReasoning(t *testing.T) {
@@ -1339,5 +1476,388 @@ func TestGetSessionStateNotFound(t *testing.T) {
 	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestSymbolicOverlayAssistHeadersAndInjection(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode":              "assist",
+			"types":             []string{"logic_map", "constraint_set", "risk_lens"},
+			"include_documents": true,
+		},
+		"documents": []map[string]any{{"id": "doc-1", "title": "Runbook", "text": "must monitor incidents and rollback safely"}},
+		"messages":  []map[string]string{{"role": "user", "content": "We must deploy and never skip compliance checks"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Overlay") != "applied" {
+		t.Fatalf("expected symbolic overlay applied, got %q", rr.Header().Get("X-GLM-Symbolic-Overlay"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Mode") != "assist" {
+		t.Fatalf("expected symbolic mode assist, got %q", rr.Header().Get("X-GLM-Symbolic-Mode"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Types") == "" {
+		t.Fatal("expected symbolic types header")
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Symbols") == "" {
+		t.Fatal("expected symbolic symbols header")
+	}
+	found := false
+	for _, m := range up.lastRequest.Messages {
+		if m.Role == "system" && bytes.Contains([]byte(m.Content), []byte("Use this symbolic overlay for grounded, policy-consistent reasoning:")) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected symbolic overlay system context injected")
+	}
+}
+
+func TestSymbolicOverlayInvalidModeReturns400(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode": "invalid-mode",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSymbolicOverlayOffSkipped(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode": "off",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Overlay") != "skipped" {
+		t.Fatalf("expected symbolic skipped, got %q", rr.Header().Get("X-GLM-Symbolic-Overlay"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Mode") != "off" {
+		t.Fatalf("expected symbolic mode off, got %q", rr.Header().Get("X-GLM-Symbolic-Mode"))
+	}
+	for _, m := range up.lastRequest.Messages {
+		if m.Role == "system" && bytes.Contains([]byte(m.Content), []byte("Use this symbolic overlay for grounded, policy-consistent reasoning:")) {
+			t.Fatal("did not expect symbolic overlay injection in off mode")
+		}
+	}
+}
+
+func TestSymbolicOverlayStrictViolationsHeader(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode":  "strict",
+			"types": []string{"constraint_set"},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "The plan must include rollback and must not disable security"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Overlay") != "applied" {
+		t.Fatalf("expected symbolic overlay applied, got %q", rr.Header().Get("X-GLM-Symbolic-Overlay"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Violations") == "" {
+		t.Fatal("expected symbolic violations header")
+	}
+}
+
+func TestSymbolicOverlayPrepareFailureIsFailOpen(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode": "assist",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "glm_internal_force_symbolic_prepare_error"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Overlay") != "error" {
+		t.Fatalf("expected symbolic overlay error header, got %q", rr.Header().Get("X-GLM-Symbolic-Overlay"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Error") != "true" {
+		t.Fatalf("expected symbolic error marker, got %q", rr.Header().Get("X-GLM-Symbolic-Error"))
+	}
+}
+
+func TestSymbolicOverlayComplianceFailureIsFailOpen(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	up.responseText = "glm_internal_force_symbolic_compliance_error"
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode": "strict",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "must include rollback"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Overlay") != "error" {
+		t.Fatalf("expected symbolic overlay error header, got %q", rr.Header().Get("X-GLM-Symbolic-Overlay"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Error") != "true" {
+		t.Fatalf("expected symbolic error marker, got %q", rr.Header().Get("X-GLM-Symbolic-Error"))
+	}
+}
+
+func TestCognitionPropagatesSymbolicOverlay(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	body := map[string]any{
+		"task":  "chat",
+		"input": "Plan rollout",
+		"symbolic_overlay": map[string]any{
+			"mode": "assist",
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/cognition", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Overlay") != "applied" {
+		t.Fatalf("expected symbolic applied, got %q", rr.Header().Get("X-GLM-Symbolic-Overlay"))
+	}
+	if up.lastRequest.SymbolicOverlay == nil {
+		t.Fatal("expected symbolic_overlay propagated into normalized request")
+	}
+}
+
+func TestReasoningWithSymbolicOverlayCarriesContext(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	body := map[string]any{
+		"model": "auto",
+		"symbolic_overlay": map[string]any{
+			"mode": "assist",
+		},
+		"reasoning": map[string]any{
+			"mode": "tot",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Compare deployment options"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	found := false
+	for _, m := range up.lastRequest.Messages {
+		if m.Role == "system" && bytes.Contains([]byte(m.Content), []byte("Use this symbolic overlay for grounded, policy-consistent reasoning:")) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected symbolic overlay context in reasoning request")
+	}
+}
+
+func TestToolCallingExecutesToolLoop(t *testing.T) {
+	toolSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tools/web_search" {
+			t.Fatalf("unexpected tool path %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer tool-secret" {
+			t.Fatalf("unexpected auth header %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("X-Client-Id") != "glm-test-client" {
+			t.Fatalf("unexpected client id %q", r.Header.Get("X-Client-Id"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"DNS","url":"https://example.com"}]}`))
+	}))
+	defer toolSrv.Close()
+
+	up := &fakeUpstream{models: []string{"mistral:7b"}, enableToolLoop: true}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.ToolCallingEnabled = true
+		cfg.ToolServerBaseURL = toolSrv.URL
+		cfg.ToolServerAPIKey = "tool-secret"
+		cfg.ToolServerClientID = "glm-test-client"
+		cfg.ToolCallingMaxIterations = 3
+		cfg.ToolCallingTimeoutSeconds = 5
+	})
+
+	body := map[string]any{
+		"model": "mistral:7b",
+		"tools": []map[string]any{
+			{"type": "function", "function": map[string]any{"name": "web_search", "parameters": map[string]any{"type": "object"}}},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Find DNS references"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Tool-Calling") != "enabled" {
+		t.Fatalf("expected tool calling enabled header, got %q", rr.Header().Get("X-GLM-Tool-Calling"))
+	}
+	if rr.Header().Get("X-GLM-Tool-Calls") != "1" {
+		t.Fatalf("expected one tool call, got %q", rr.Header().Get("X-GLM-Tool-Calls"))
+	}
+	seenTool := false
+	for _, m := range up.lastRequest.Messages {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			seenTool = true
+			break
+		}
+	}
+	if !seenTool {
+		t.Fatal("expected tool message sent upstream after tool execution")
+	}
+}
+
+func TestToolCallingDisabledRejectsTools(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model":    "mistral:7b",
+		"tools":    []map[string]any{{"type": "function", "function": map[string]any{"name": "web_search"}}},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestToolCallingWithReasoningSupported(t *testing.T) {
+	toolSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/openapi.json" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"openapi":"3.1.0","paths":{"/tools/web_search":{"post":{"summary":"Web search","requestBody":{"content":{"application/json":{"schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}}}}}}}`))
+			return
+		}
+		if r.URL.Path == "/tools/web_search" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"title":"DNS","url":"https://example.com"}]}`))
+			return
+		}
+		t.Fatalf("unexpected path %q", r.URL.Path)
+	}))
+	defer toolSrv.Close()
+	up := &fakeUpstream{models: []string{"mistral:7b"}, enableToolLoop: true}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.ToolCallingEnabled = true
+		cfg.ToolServerBaseURL = toolSrv.URL
+		cfg.ToolServerAPIKey = "tool-secret"
+		cfg.ToolServerClientID = "glm-test-client"
+	})
+	body := map[string]any{
+		"model":     "mistral:7b",
+		"tools":     []map[string]any{{"type": "function", "function": map[string]any{"name": "web_search"}}},
+		"reasoning": map[string]any{"mode": "tot"},
+		"messages":  []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if rr.Header().Get("X-GLM-Tool-Calling") != "enabled" {
+		t.Fatalf("expected tool calling enabled header, got %q", rr.Header().Get("X-GLM-Tool-Calling"))
+	}
+}
+
+func TestToolCallingAutoDiscoversFromOpenAPI(t *testing.T) {
+	toolSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openapi.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"openapi":"3.1.0","paths":{"/tools/web_search":{"post":{"summary":"Web search","requestBody":{"content":{"application/json":{"schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}}}}}}}`))
+		case "/tools/web_search":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[{"title":"DNS","url":"https://example.com"}]}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer toolSrv.Close()
+	up := &fakeUpstream{models: []string{"mistral:7b"}, enableToolLoop: true}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.ToolCallingEnabled = true
+		cfg.ToolServerBaseURL = toolSrv.URL
+		cfg.ToolServerAPIKey = "tool-secret"
+		cfg.ToolServerClientID = "glm-test-client"
+	})
+	body := map[string]any{
+		"model":       "mistral:7b",
+		"tool_choice": "auto",
+		"messages":    []map[string]string{{"role": "user", "content": "find dns"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Tool-Calls") != "1" {
+		t.Fatalf("expected one tool call, got %q", rr.Header().Get("X-GLM-Tool-Calls"))
 	}
 }

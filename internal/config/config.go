@@ -79,6 +79,16 @@ type Config struct {
 	DocumentStageTimeout             time.Duration
 	StyleContractEnabled             bool
 	StyleContractVersion             string
+	SymbolicOverlayEnabled           bool
+	SymbolicOverlayMaxSymbols        int
+	SymbolicOverlayMaxDocChars       int
+	SymbolicOverlayStrictCheck       bool
+	ToolCallingEnabled               bool
+	ToolServerBaseURL                string
+	ToolServerAPIKey                 string
+	ToolServerClientID               string
+	ToolCallingMaxIterations         int
+	ToolCallingTimeoutSeconds        int
 	MetaReasoningEnabled             bool
 	MetaReasoningDefaultProfile      string
 	MetaReasoningAcceptThreshold     float64
@@ -163,6 +173,16 @@ func Load() Config {
 		DocumentStageTimeout:             time.Duration(envInt("GLM_DOCUMENT_STAGE_TIMEOUT_SECONDS", 25)) * time.Second,
 		StyleContractEnabled:             envBool("GLM_STYLE_CONTRACT_ENABLED", true),
 		StyleContractVersion:             env("GLM_STYLE_CONTRACT_VERSION", "v1"),
+		SymbolicOverlayEnabled:           envBool("GLM_SYMBOLIC_OVERLAY_ENABLED", true),
+		SymbolicOverlayMaxSymbols:        envInt("GLM_SYMBOLIC_OVERLAY_MAX_SYMBOLS", 48),
+		SymbolicOverlayMaxDocChars:       envInt("GLM_SYMBOLIC_OVERLAY_MAX_DOC_CHARS", 12000),
+		SymbolicOverlayStrictCheck:       envBool("GLM_SYMBOLIC_OVERLAY_STRICT_CHECK", true),
+		ToolCallingEnabled:               envBool("GLM_TOOL_CALLING_ENABLED", false),
+		ToolServerBaseURL:                env("GLM_TOOL_SERVER_BASE_URL", "https://chat.thynaptic.com"),
+		ToolServerAPIKey:                 env("GLM_TOOL_SERVER_API_KEY", ""),
+		ToolServerClientID:               env("GLM_TOOL_SERVER_CLIENT_ID", ""),
+		ToolCallingMaxIterations:         envInt("GLM_TOOL_CALLING_MAX_ITERATIONS", 4),
+		ToolCallingTimeoutSeconds:        envInt("GLM_TOOL_CALLING_TIMEOUT_SECONDS", 60),
 		MetaReasoningEnabled:             envBool("GLM_META_REASONING_ENABLED", true),
 		MetaReasoningDefaultProfile:      env("GLM_META_REASONING_DEFAULT_PROFILE", "default"),
 		MetaReasoningAcceptThreshold:     envFloat("GLM_META_REASONING_ACCEPT_THRESHOLD", 0.72),

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chat.thynaptic.com/schemas/api_keys_file.v1.json",
+  "title": "G-LM Tool Server API Keys File (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "defaults", "clients"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rate_limit_rpm", "max_concurrent_requests"],
+      "properties": {
+        "rate_limit_rpm": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_concurrent_requests": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    },
+    "clients": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/client" }
+    }
+  },
+  "$defs": {
+    "toolName": {
+      "type": "string",
+      "enum": ["web_search", "fetch_url", "http_request", "vector_retrieve", "code_exec_sandbox"]
+    },
+    "namespace": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,63}$"
+    },
+    "clientKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "key_hash", "created_at"],
+      "properties": {
+        "key_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "key_hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "expires_at": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "string", "format": "date-time" }
+          ]
+        }
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["client_id", "status", "keys", "allowed_tools"],
+      "properties": {
+        "client_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "disabled"] },
+        "keys": {
+          "type": "array",
+          "minItems": 0,
+          "items": { "$ref": "#/$defs/clientKey" }
+        },
+        "allowed_tools": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/toolName" },
+          "uniqueItems": true
+        },
+        "rate_limit_rpm": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_concurrent_requests": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "http_allowlist_profile": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "vector_namespaces": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/namespace" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

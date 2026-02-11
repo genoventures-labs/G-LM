@@ -32,6 +32,8 @@ import (
 	"github.com/mike/cognitive-llm/internal/state"
 	"github.com/mike/cognitive-llm/internal/store"
 	"github.com/mike/cognitive-llm/internal/stylecontract"
+	"github.com/mike/cognitive-llm/internal/symbolicoverlay"
+	"github.com/mike/cognitive-llm/internal/toolcalling"
 )
 
 type upstream interface {
@@ -54,6 +56,8 @@ type Server struct {
 	memory   *memorydynamics.Service
 	meta     *metareasoning.Evaluator
 	style    *stylecontract.Injector
+	symbolic *symbolicoverlay.Service
+	tools    *toolcalling.Client
 	state    *state.Manager
 	upstream upstream
 	mux      *http.ServeMux
@@ -153,6 +157,13 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 			Enabled: cfg.StyleContractEnabled,
 			Version: cfg.StyleContractVersion,
 		}),
+		symbolic: symbolicoverlay.New(symbolicoverlay.Config{
+			Enabled:      cfg.SymbolicOverlayEnabled,
+			MaxSymbols:   cfg.SymbolicOverlayMaxSymbols,
+			MaxDocChars:  cfg.SymbolicOverlayMaxDocChars,
+			StrictChecks: cfg.SymbolicOverlayStrictCheck,
+		}),
+		tools:    toolcalling.New(cfg.ToolServerBaseURL, cfg.ToolServerAPIKey, cfg.ToolServerClientID, time.Duration(cfg.ToolCallingTimeoutSeconds)*time.Second),
 		state:    state.NewManager(cfg.StateHistoryWindow),
 		upstream: upstream,
 		mux:      http.NewServeMux(),
@@ -220,7 +231,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.2"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.3"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +282,14 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "messages are required")
 		return
 	}
+	if req.Stream && (len(req.Tools) > 0 || shouldAutoloadTools(req)) {
+		writeError(w, http.StatusBadRequest, "stream with tools is not supported")
+		return
+	}
+	if (len(req.Tools) > 0 || shouldAutoloadTools(req)) && !s.cfg.ToolCallingEnabled {
+		writeError(w, http.StatusBadRequest, "tool calling is disabled")
+		return
+	}
 	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "multi_agent") && !req.Reasoning.MultiAgentEnabled {
 		writeError(w, http.StatusBadRequest, "multi_agent_enabled must be true when reasoning.mode=multi_agent")
 		return
@@ -286,6 +305,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if intentResult.NeedsRewrite {
 			w.Header().Set("X-GLM-Intent-Rewritten", "true")
 		}
+	}
+	if err := s.symbolic.ValidateRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	sessionID := s.state.ResolveSessionID(req.SessionID, r.Header.Get("X-Session-ID"), keyID)
@@ -310,6 +333,44 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.EmotionalModulationEnabled {
 		req.Messages = injectToneMetadata(req.Messages, stateSnapshot)
 	}
+	toolRequested := len(req.Tools) > 0 || shouldAutoloadTools(req)
+	if toolRequested {
+		w.Header().Set("X-GLM-Tool-Calling", "enabled")
+	}
+	symbolicRequested := req.SymbolicOverlay != nil
+	symbolicMode := ""
+	symbolicTypes := ""
+	symbolicApplied := false
+	symbolicError := false
+	symbolicViolations := 0
+	symbolicArtifact := symbolicoverlay.OverlayArtifact{}
+	if symbolicRequested {
+		preparedReq, symbolicRes, symErr := s.symbolic.Prepare(req, stateSnapshot)
+		if symErr != nil {
+			symbolicError = true
+			w.Header().Set("X-GLM-Symbolic-Overlay", "error")
+			w.Header().Set("X-GLM-Symbolic-Error", "true")
+			log.Printf("symbolic overlay prepare failed: %v", symErr)
+		} else {
+			req = preparedReq
+			symbolicMode = symbolicRes.Mode
+			symbolicTypes = strings.Join(symbolicRes.Types, ",")
+			symbolicArtifact = symbolicRes.Artifact
+			if symbolicRes.Applied {
+				symbolicApplied = true
+				w.Header().Set("X-GLM-Symbolic-Overlay", "applied")
+				w.Header().Set("X-GLM-Symbolic-Symbols", strconv.Itoa(symbolicRes.SymbolCount))
+			} else {
+				w.Header().Set("X-GLM-Symbolic-Overlay", "skipped")
+			}
+			if symbolicMode != "" {
+				w.Header().Set("X-GLM-Symbolic-Mode", symbolicMode)
+			}
+			if symbolicTypes != "" {
+				w.Header().Set("X-GLM-Symbolic-Types", symbolicTypes)
+			}
+		}
+	}
 	requestedReasoningMode := ""
 	if req.Reasoning != nil {
 		requestedReasoningMode = strings.ToLower(strings.TrimSpace(req.Reasoning.Mode))
@@ -331,7 +392,6 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-
 	policyRec := s.policy.ResolveModelPolicy(ctx, tenantID)
 	routingReason := ""
 	routingClass := ""
@@ -473,6 +533,9 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var reasoningTrace *reasoning.Trace
 	usedModel := req.Model
 	outcome := "success"
+	if toolRequested {
+		outcome = outcome + "|tool_calling=true"
+	}
 	if routingReason != "" {
 		outcome = outcome + "|route=" + routingReason
 		if routingClass != "" {
@@ -502,6 +565,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			outcome = outcome + "|memory_replay=triggered"
 		}
 	}
+	execUpstream := s.upstreamForRequest(req)
 	if s.reasoner.ShouldExecute(req, stateSnapshot) {
 		var trace reasoning.Trace
 		reasonMode := ""
@@ -509,7 +573,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			reasonMode = strings.ToLower(strings.TrimSpace(req.Reasoning.Mode))
 		}
 		reasonCtx, cancelReason := context.WithTimeout(ctx, s.resolveReasoningTimeout(req))
-		resp, trace, err = s.reasoner.Execute(reasonCtx, s.upstream, req, policyRec, stateSnapshot)
+		resp, trace, err = s.reasoner.Execute(reasonCtx, execUpstream, req, policyRec, stateSnapshot)
 		cancelReason()
 		if err != nil {
 			w.Header().Set("X-GLM-Reasoning-Pipeline", "fallback")
@@ -523,7 +587,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				mctsReq.Reasoning.Mode = "mcts"
 				mctsReq.Reasoning.MultiAgentEnabled = false
 				mctsCtx, cancelMCTS := context.WithTimeout(ctx, s.resolveReasoningTimeout(mctsReq))
-				resp, trace, err = s.reasoner.ExecuteMCTS(mctsCtx, s.upstream, mctsReq, policyRec, stateSnapshot)
+				resp, trace, err = s.reasoner.ExecuteMCTS(mctsCtx, execUpstream, mctsReq, policyRec, stateSnapshot)
 				cancelMCTS()
 				if err == nil {
 					reasoningTrace = &trace
@@ -547,7 +611,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					totReq.Reasoning.Mode = "tot"
 					totReq.Reasoning.MultiAgentEnabled = false
 					totCtx, cancelTot := context.WithTimeout(ctx, s.cfg.ReasoningStageTimeout)
-					resp, trace, err = s.reasoner.ExecuteToT(totCtx, s.upstream, totReq, policyRec, stateSnapshot)
+					resp, trace, err = s.reasoner.ExecuteToT(totCtx, execUpstream, totReq, policyRec, stateSnapshot)
 					cancelTot()
 					if err == nil {
 						reasoningTrace = &trace
@@ -562,7 +626,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 						log.Printf("multi-agent fail-open tot failed, falling back direct: %v", err)
 						directReq := req
 						directReq.Reasoning = nil
-						resp, err = s.upstream.ChatCompletions(ctx, directReq)
+						resp, err = execUpstream.ChatCompletions(ctx, directReq)
 						if err == nil {
 							w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
 							w.Header().Set("X-GLM-MA-Fallback", "direct")
@@ -577,7 +641,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				}
 				totReq.Reasoning.Mode = "tot"
 				totCtx, cancelTot := context.WithTimeout(ctx, s.cfg.ReasoningStageTimeout)
-				resp, trace, err = s.reasoner.ExecuteToT(totCtx, s.upstream, totReq, policyRec, stateSnapshot)
+				resp, trace, err = s.reasoner.ExecuteToT(totCtx, execUpstream, totReq, policyRec, stateSnapshot)
 				cancelTot()
 				if err == nil {
 					reasoningTrace = &trace
@@ -592,7 +656,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					log.Printf("mcts fail-open tot failed, falling back direct: %v", err)
 					directReq := req
 					directReq.Reasoning = nil
-					resp, err = s.upstream.ChatCompletions(ctx, directReq)
+					resp, err = execUpstream.ChatCompletions(ctx, directReq)
 					if err == nil {
 						w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
 						w.Header().Set("X-GLM-MCTS-Fallback", "direct")
@@ -603,7 +667,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				log.Printf("reasoning pipeline failed, falling back direct: %v", err)
 				directReq := req
 				directReq.Reasoning = nil
-				resp, err = s.upstream.ChatCompletions(ctx, directReq)
+				resp, err = execUpstream.ChatCompletions(ctx, directReq)
 				if err == nil {
 					w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
 				}
@@ -658,13 +722,25 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if requestedReasoningMode != "" {
 			w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
 		}
-		resp, err = s.upstream.ChatCompletions(ctx, req)
+		var toolCalls, toolIters int
+		var toolErr error
+		resp, toolCalls, toolIters, toolErr = s.chatWithTools(ctx, req)
+		if toolRequested {
+			w.Header().Set("X-GLM-Tool-Calls", strconv.Itoa(toolCalls))
+			w.Header().Set("X-GLM-Tool-Iterations", strconv.Itoa(toolIters))
+			if toolErr != nil {
+				w.Header().Set("X-GLM-Tool-Error", "true")
+				log.Printf("tool calling error: %v", toolErr)
+			}
+			outcome = outcome + "|tool_calls=" + strconv.Itoa(toolCalls) + "|tool_iterations=" + strconv.Itoa(toolIters)
+		}
+		err = toolErr
 	}
 	if err != nil && policyRec.FallbackModel != "" && policyRec.FallbackModel != req.Model {
 		fallbackReq := req
 		fallbackReq.Model = policyRec.FallbackModel
 		if policy.Allowed(fallbackReq.Model, policyRec) {
-			resp, err = s.upstream.ChatCompletions(ctx, fallbackReq)
+			resp, err = execUpstream.ChatCompletions(ctx, fallbackReq)
 			usedModel = fallbackReq.Model
 			if err == nil {
 				outcome = outcome + "|fallback=policy_model"
@@ -702,6 +778,30 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				"|meta_risk=" + formatFloat(metaResult.RiskScore) +
 				"|meta_profile=" + metaResult.Profile
 		}
+	}
+	if symbolicRequested && symbolicMode == "strict" && symbolicApplied {
+		comp, compErr := s.symbolic.CheckCompliance(req, resp, symbolicArtifact)
+		if compErr != nil {
+			symbolicError = true
+			w.Header().Set("X-GLM-Symbolic-Overlay", "error")
+			w.Header().Set("X-GLM-Symbolic-Error", "true")
+			log.Printf("symbolic overlay compliance failed: %v", compErr)
+		} else if comp.Checked {
+			symbolicViolations = comp.ViolationCount
+			w.Header().Set("X-GLM-Symbolic-Violations", strconv.Itoa(comp.ViolationCount))
+		}
+	}
+	if symbolicRequested {
+		if symbolicMode == "" {
+			symbolicMode = "assist"
+		}
+		outcome = outcome + "|symbolic=true" +
+			"|symbolic_mode=" + symbolicMode +
+			"|symbolic_types=" + symbolicTypes +
+			"|symbolic_violations=" + strconv.Itoa(symbolicViolations) +
+			"|symbolic_error=" + strconv.FormatBool(symbolicError)
+	} else {
+		outcome = outcome + "|symbolic=false"
 	}
 
 	if !policyRec.ReasoningVisible {
@@ -1060,16 +1160,19 @@ func normalizeCognitionRequest(in model.CognitionRequest, cognitionDefaultModel 
 		task = "chat"
 	}
 	out := model.ChatCompletionRequest{
-		Model:         in.Model,
-		SessionID:     in.SessionID,
-		Reasoning:     in.Reasoning,
-		ResponseStyle: in.ResponseStyle,
-		Documents:     in.Documents,
-		DocumentFlow:  in.DocumentFlow,
-		Messages:      append([]model.Message{}, in.Messages...),
-		Temperature:   in.Temperature,
-		MaxTokens:     in.MaxTokens,
-		Stream:        in.Stream,
+		Model:           in.Model,
+		SessionID:       in.SessionID,
+		Reasoning:       in.Reasoning,
+		SymbolicOverlay: in.SymbolicOverlay,
+		ResponseStyle:   in.ResponseStyle,
+		Documents:       in.Documents,
+		DocumentFlow:    in.DocumentFlow,
+		Tools:           in.Tools,
+		ToolChoice:      in.ToolChoice,
+		Messages:        append([]model.Message{}, in.Messages...),
+		Temperature:     in.Temperature,
+		MaxTokens:       in.MaxTokens,
+		Stream:          in.Stream,
 	}
 	if len(out.Messages) == 0 && strings.TrimSpace(in.Input) != "" {
 		out.Messages = []model.Message{{Role: "user", Content: strings.TrimSpace(in.Input)}}

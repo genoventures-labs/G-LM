@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "defaults": {
+    "rate_limit_rpm": 120,
+    "max_concurrent_requests": 20
+  },
+  "clients": [
+    {
+      "client_id": "glm-prod-us",
+      "status": "active",
+      "keys": [
+        {
+          "key_id": "k_2026_01_a",
+          "key_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "created_at": "2026-02-11T00:00:00Z",
+          "expires_at": null
+        },
+        {
+          "key_id": "k_2026_02_b",
+          "key_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "created_at": "2026-02-18T00:00:00Z",
+          "expires_at": null
+        }
+      ],
+      "allowed_tools": [
+        "web_search",
+        "fetch_url",
+        "http_request",
+        "vector_retrieve",
+        "code_exec_sandbox"
+      ],
+      "rate_limit_rpm": 180,
+      "max_concurrent_requests": 30,
+      "http_allowlist_profile": "default_public",
+      "vector_namespaces": ["docs", "kb", "runbooks"]
+    },
+    {
+      "client_id": "glm-staging",
+      "status": "disabled",
+      "keys": [
+        {
+          "key_id": "k_2026_01_stage",
+          "key_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "created_at": "2026-02-11T00:00:00Z",
+          "expires_at": "2026-04-01T00:00:00Z"
+        }
+      ],
+      "allowed_tools": ["web_search", "fetch_url", "vector_retrieve"],
+      "http_allowlist_profile": "staging_only",
+      "vector_namespaces": ["docs"]
+    }
+  ]
+}

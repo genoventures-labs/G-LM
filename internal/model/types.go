@@ -3,36 +3,83 @@ package model
 import "time"
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Name       string     `json:"name,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
 type ChatCompletionRequest struct {
-	Model         string                 `json:"model"`
-	SessionID     string                 `json:"session_id,omitempty"`
-	Reasoning     *ReasoningOptions      `json:"reasoning,omitempty"`
-	ResponseStyle *ResponseStyle         `json:"response_style,omitempty"`
-	Documents     []DocumentInput        `json:"documents,omitempty"`
-	DocumentFlow  *DocumentOrchestration `json:"document_orchestration,omitempty"`
-	Messages      []Message              `json:"messages"`
-	Temperature   *float64               `json:"temperature,omitempty"`
-	MaxTokens     *int                   `json:"max_tokens,omitempty"`
-	Stream        bool                   `json:"stream,omitempty"`
+	Model           string                  `json:"model"`
+	SessionID       string                  `json:"session_id,omitempty"`
+	Reasoning       *ReasoningOptions       `json:"reasoning,omitempty"`
+	SymbolicOverlay *SymbolicOverlayOptions `json:"symbolic_overlay,omitempty"`
+	ResponseStyle   *ResponseStyle          `json:"response_style,omitempty"`
+	Documents       []DocumentInput         `json:"documents,omitempty"`
+	DocumentFlow    *DocumentOrchestration  `json:"document_orchestration,omitempty"`
+	Messages        []Message               `json:"messages"`
+	Tools           []ToolDefinition        `json:"tools,omitempty"`
+	ToolChoice      any                     `json:"tool_choice,omitempty"`
+	Temperature     *float64                `json:"temperature,omitempty"`
+	MaxTokens       *int                    `json:"max_tokens,omitempty"`
+	Stream          bool                    `json:"stream,omitempty"`
 }
 
 type CognitionRequest struct {
-	Task          string                 `json:"task,omitempty"`
-	Input         string                 `json:"input,omitempty"`
-	Model         string                 `json:"model,omitempty"`
-	SessionID     string                 `json:"session_id,omitempty"`
-	Messages      []Message              `json:"messages,omitempty"`
-	ResponseStyle *ResponseStyle         `json:"response_style,omitempty"`
-	Documents     []DocumentInput        `json:"documents,omitempty"`
-	Reasoning     *ReasoningOptions      `json:"reasoning,omitempty"`
-	DocumentFlow  *DocumentOrchestration `json:"document_orchestration,omitempty"`
-	Temperature   *float64               `json:"temperature,omitempty"`
-	MaxTokens     *int                   `json:"max_tokens,omitempty"`
-	Stream        bool                   `json:"stream,omitempty"`
+	Task            string                  `json:"task,omitempty"`
+	Input           string                  `json:"input,omitempty"`
+	Model           string                  `json:"model,omitempty"`
+	SessionID       string                  `json:"session_id,omitempty"`
+	Messages        []Message               `json:"messages,omitempty"`
+	ResponseStyle   *ResponseStyle          `json:"response_style,omitempty"`
+	Documents       []DocumentInput         `json:"documents,omitempty"`
+	Reasoning       *ReasoningOptions       `json:"reasoning,omitempty"`
+	SymbolicOverlay *SymbolicOverlayOptions `json:"symbolic_overlay,omitempty"`
+	DocumentFlow    *DocumentOrchestration  `json:"document_orchestration,omitempty"`
+	Tools           []ToolDefinition        `json:"tools,omitempty"`
+	ToolChoice      any                     `json:"tool_choice,omitempty"`
+	Temperature     *float64                `json:"temperature,omitempty"`
+	MaxTokens       *int                    `json:"max_tokens,omitempty"`
+	Stream          bool                    `json:"stream,omitempty"`
+}
+
+type ToolDefinition struct {
+	Type     string       `json:"type,omitempty"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Parameters  any    `json:"parameters,omitempty"`
+}
+
+type ToolCall struct {
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function ToolFunctionCall `json:"function"`
+}
+
+type ToolFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
+}
+
+type SymbolicOverlayType string
+
+const (
+	SymbolicOverlayTypeLogicMap      SymbolicOverlayType = "logic_map"
+	SymbolicOverlayTypeConstraintSet SymbolicOverlayType = "constraint_set"
+	SymbolicOverlayTypeRiskLens      SymbolicOverlayType = "risk_lens"
+)
+
+type SymbolicOverlayOptions struct {
+	Mode             string   `json:"mode,omitempty"`
+	Types            []string `json:"types,omitempty"`
+	MaxSymbols       int      `json:"max_symbols,omitempty"`
+	IncludeState     bool     `json:"include_state,omitempty"`
+	IncludeDocuments bool     `json:"include_documents,omitempty"`
 }
 
 type ReasoningOptions struct {
@@ -88,8 +135,10 @@ type ChatCompletionResponse struct {
 	Choices []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string     `json:"role"`
+			Content   string     `json:"content"`
+			Name      string     `json:"name,omitempty"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason,omitempty"`
 	} `json:"choices"`

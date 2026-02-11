@@ -150,6 +150,16 @@ If you intentionally run without PocketBase auth, set `GLM_POCKETBASE_ALLOW_UNAU
 - `GLM_DOCUMENT_STAGE_TIMEOUT_SECONDS` (default: `25`)
 - `GLM_STYLE_CONTRACT_ENABLED` (default: `true`)
 - `GLM_STYLE_CONTRACT_VERSION` (default: `v1`)
+- `GLM_SYMBOLIC_OVERLAY_ENABLED` (default: `true`)
+- `GLM_SYMBOLIC_OVERLAY_MAX_SYMBOLS` (default: `48`)
+- `GLM_SYMBOLIC_OVERLAY_MAX_DOC_CHARS` (default: `12000`)
+- `GLM_SYMBOLIC_OVERLAY_STRICT_CHECK` (default: `true`)
+- `GLM_TOOL_CALLING_ENABLED` (default: `false`)
+- `GLM_TOOL_SERVER_BASE_URL` (default: `https://chat.thynaptic.com`)
+- `GLM_TOOL_SERVER_API_KEY`
+- `GLM_TOOL_SERVER_CLIENT_ID`
+- `GLM_TOOL_CALLING_MAX_ITERATIONS` (default: `4`)
+- `GLM_TOOL_CALLING_TIMEOUT_SECONDS` (default: `60`, hard timeout ceiling used with per-tool defaults)
 - `GLM_META_REASONING_ENABLED` (default: `true`)
 - `GLM_META_REASONING_DEFAULT_PROFILE` (default: `default`)
 - `GLM_META_REASONING_ACCEPT_THRESHOLD` (default: `0.72`)
@@ -188,6 +198,10 @@ Monte Carlo agent mode is opt-in via `reasoning.mode = "mcts"` and emits `X-GLM-
 Multi-agent mode is opt-in via `reasoning.mode = "multi_agent"` (with `multi_agent_enabled=true`) and emits `X-GLM-MA-*` headers; on failures it fail-opens to MCTS/ToT/direct when enabled.
 Intent preprocessor runs deterministic normalization + ambiguity scoring + intent classification before model execution.
 Document orchestration runs above model execution for multi-document chunking, hierarchical summaries, cross-document linking, and synthesis context injection.
+Tool calling is OpenAI-compatible when request includes `tools`; G-LM executes tool calls via the configured external tool server (`/tools/*`) and feeds tool results back into the model loop.
+When `tool_choice="auto"` and `tools` are omitted, G-LM auto-discovers tool schemas from the tool server `/openapi.json`.
+Tool calling is supported for direct calls and reasoning modes (ToT/MCTS/multi-agent), and applies per-tool timeout/retry policy at runtime.
+Symbolic overlays are opt-in per request (`symbolic_overlay`) and run after intent preprocessing and before document orchestration; strict mode adds fail-open post-response compliance checks.
 Memory dynamics adds PB-backed memory nodes with Go-calculated forgetting/freshness/replay scoring for session continuity.
 
 Example orchestrator debug request:
@@ -258,6 +272,20 @@ curl -i -s -X POST http://localhost:8081/v1/chat/completions \
   }'
 ```
 
+Example symbolic overlay request (assist):
+
+```bash
+curl -i -s -X POST http://localhost:8081/v1/chat/completions \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model":"mistral:7b",
+    "symbolic_overlay":{"mode":"assist","types":["logic_map","constraint_set","risk_lens"],"include_documents":true},
+    "documents":[{"id":"doc-1","title":"Runbook","text":"Rollback is required for incidents and compliance checks must not be skipped."}],
+    "messages":[{"role":"user","content":"Design rollout controls and guardrails"}]
+  }'
+```
+
 Unified cognition request spec (single route for chat/reasoning/document/extraction tasks):
 
 ```json
@@ -282,6 +310,9 @@ Unified cognition request spec (single route for chat/reasoning/document/extract
   "messages": [{"role":"user","content":"optional, used instead of input when provided"}],
   "documents": [{"id":"doc-1","title":"Doc","text":"..."}],
   "reasoning": {"mode":"tot","branches":3,"meta_enabled":true,"meta_profile":"default"},
+  "symbolic_overlay": {"mode":"assist","types":["logic_map","constraint_set","risk_lens"],"max_symbols":48,"include_state":false,"include_documents":true},
+  "tools": [{"type":"function","function":{"name":"web_search","description":"Search web","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}}],
+  "tool_choice": "auto",
   "document_orchestration": {"mode":"hierarchical","chunk_size":1200,"max_documents":8},
   "temperature": 0.2,
   "max_tokens": 512,
@@ -293,6 +324,9 @@ When omitted, gateway fills `response_style` deterministically from session cogn
 `X-GLM-Response-Style`, `X-GLM-Breathing-Weight`, `X-GLM-Pacing`, `X-GLM-Micro-Switches`, `X-GLM-Risk-Flags`.
 Subtext classification (sarcasm/vulnerability/fatigue) remains model-driven; gateway only supplies assist metrics (`rolling_sentiment`, `conversation_drift`, `risk_flags`).
 Gateway also injects a versioned style contract prompt and exposes it via `X-GLM-Style-Contract`.
+When `symbolic_overlay` is present, gateway emits:
+`X-GLM-Symbolic-Overlay`, `X-GLM-Symbolic-Mode`, `X-GLM-Symbolic-Types`, `X-GLM-Symbolic-Symbols`, and in strict mode `X-GLM-Symbolic-Violations`.
+On fail-open symbolic stage/check errors, gateway sets `X-GLM-Symbolic-Overlay: error` and `X-GLM-Symbolic-Error: true`.
 When `reasoning.meta_enabled=true`, gateway runs deterministic meta-reasoning and emits:
 `X-GLM-Meta-Reasoning`, `X-GLM-Meta-Decision`, `X-GLM-Meta-Confidence`, `X-GLM-Meta-Risk-Score`, `X-GLM-Meta-Profile`.
 

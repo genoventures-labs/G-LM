@@ -18,13 +18,17 @@ func (f *fakeUpstream) ChatCompletions(ctx context.Context, req model.ChatComple
 	resp.Choices = []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string           `json:"role"`
+			Content   string           `json:"content"`
+			Name      string           `json:"name,omitempty"`
+			ToolCalls []model.ToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason,omitempty"`
 	}{{Index: 0, Message: struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role      string           `json:"role"`
+		Content   string           `json:"content"`
+		Name      string           `json:"name,omitempty"`
+		ToolCalls []model.ToolCall `json:"tool_calls,omitempty"`
 	}{Role: "assistant", Content: "summary text entities compliance rollout risk controls"}}}
 	return resp, nil
 }
