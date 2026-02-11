@@ -182,6 +182,12 @@ Use `/admin/v1/tenants/{tenant_id}/audit-events` for governance and post-inciden
 - Contract style: OpenAI-compatible runtime surface
 - Backward compatibility goal: additive evolution of request options and headers
 
+Release note standard:
+
+- Every GitHub release should include `Quick Read`, `Highlights`, and `Operational Notes` sections (not only the compare link).
+- Use `/Users/mike/Desktop/testModel/docs/release_notes_template.md` as the baseline structure.
+- Include the full compare link as a supporting link, not the only content.
+
 ## Repository Structure
 
 - `/cmd/glm-api`: service entrypoint and operational CLI commands
