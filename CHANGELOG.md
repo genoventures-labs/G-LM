@@ -4,19 +4,52 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-02-11
+
 ### Changed
 - Document orchestration now relies on live upstream model inventory for request-time model validation/resolution rather than implicit model passthrough.
 - Gateway reuses a single `/api/v1/models` inventory fetch per request when auto-routing or document orchestration is active.
 - Document chunk/document summarization subcalls now run on the same resolved final model (single-model lane).
+- Router upgraded to a predictive JIT inventory manager with a background reconciliation loop and class-aware ideal model routing.
+- Router now performs fail-open async pull scheduling for missing ideal models while continuing request routing on warm models.
+- Added LRU-based inventory cleanup guards with protected model exclusions and threshold-based pruning behavior.
+- Added startup/runtime wiring for sovereign Ollama control-plane operations separate from OpenWebUI inference traffic.
+- Default Ollama control endpoint now resolves to `http://127.0.0.1:11434` so JIT control is enabled by default when JIT is enabled.
 
 ### Added
 - New response header when document orchestration is applied:
   - `X-GLM-Document-Model`
 - Explicit model canonicalization against live inventory (case-insensitive match to upstream model id).
+- New direct Ollama control client for model inventory/pull/prune operations:
+  - `GET /api/tags`
+  - `POST /api/pull`
+  - `DELETE /api/delete`
+  - optional host stats probe support
+- New JIT inventory config surface:
+  - `GLM_JIT_INVENTORY_ENABLED`
+  - `GLM_JIT_RECONCILE_SECONDS`
+  - `GLM_JIT_RECONCILE_JITTER_SECONDS`
+  - `GLM_JIT_MAX_MODELS`
+  - `GLM_JIT_STORAGE_HIGH_WATERMARK`
+  - `GLM_JIT_STORAGE_TARGET_WATERMARK`
+  - `GLM_JIT_PULL_TIMEOUT_SECONDS`
+  - `GLM_JIT_PRUNE_ENABLED`
+  - `GLM_JIT_IDEAL_CODING`
+  - `GLM_JIT_IDEAL_EXTRACTION`
+  - `GLM_JIT_IDEAL_LIGHT_QA`
+  - `GLM_JIT_IDEAL_GENERAL`
+  - `GLM_OLLAMA_CONTROL_URL`
+  - `GLM_OLLAMA_CONTROL_API_KEY`
+- New routing observability headers:
+  - `X-GLM-Ideal-Model`
+  - `X-GLM-Ideal-Available`
+  - `X-GLM-JIT-Pull-Triggered`
+  - `X-GLM-JIT-Inventory-Stale`
 
 ### Fixed
 - Explicit unavailable models now fail fast with `503 requested model is not available upstream` and audit outcome tag `route=explicit.model_unavailable`.
 - Added coverage to ensure one inventory lookup in auto+docflow paths and explicit-unavailable handling.
+- Added deduping/cooldown protections to avoid repeated concurrent pulls for the same ideal model.
 
 ## [0.1.1] - 2026-02-11
 

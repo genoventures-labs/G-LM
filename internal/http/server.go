@@ -59,7 +59,7 @@ type Server struct {
 	mux      *http.ServeMux
 }
 
-func NewServer(cfg config.Config, st store.Store, upstream upstream) *Server {
+func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...orchestrator.InventoryControlClient) *Server {
 	if cfg.MemoryOpTimeout <= 0 {
 		cfg.MemoryOpTimeout = 2 * time.Second
 	}
@@ -75,11 +75,31 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream) *Server {
 	if cfg.MultiAgentStageTimeout <= 0 {
 		cfg.MultiAgentStageTimeout = 45 * time.Second
 	}
-	router := orchestrator.NewRouter(
+	var controlClient orchestrator.InventoryControlClient
+	if len(control) > 0 {
+		controlClient = control[0]
+	}
+	router := orchestrator.NewRouterWithControl(
 		cfg.OrchestratorDefaultModel,
 		cfg.OrchestratorAliases,
 		cfg.OrchestratorFallback,
+		orchestrator.RouterConfig{
+			JITInventoryEnabled:    cfg.JITInventoryEnabled,
+			ReconcileInterval:      time.Duration(cfg.JITReconcileSeconds) * time.Second,
+			ReconcileJitter:        time.Duration(cfg.JITReconcileJitterSeconds) * time.Second,
+			MaxModels:              cfg.JITMaxModels,
+			StorageHighWatermark:   cfg.JITStorageHighWatermark,
+			StorageTargetWatermark: cfg.JITStorageTargetWatermark,
+			PullTimeout:            time.Duration(cfg.JITPullTimeoutSeconds) * time.Second,
+			PruneEnabled:           cfg.JITPruneEnabled,
+			IdealCoding:            cfg.JITIdealCoding,
+			IdealExtraction:        cfg.JITIdealExtraction,
+			IdealLightQA:           cfg.JITIdealLightQA,
+			IdealGeneral:           cfg.JITIdealGeneral,
+		},
+		controlClient,
 	)
+	router.Start(context.Background())
 	s := &Server{
 		cfg:     cfg,
 		store:   st,
@@ -352,6 +372,16 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		routingClass = decision.TaskClass
 		w.Header().Set("X-GLM-Routed-Model", decision.ChosenModel)
 		w.Header().Set("X-GLM-Routing-Reason", decision.Reason)
+		if decision.IdealModel != "" {
+			w.Header().Set("X-GLM-Ideal-Model", decision.IdealModel)
+			w.Header().Set("X-GLM-Ideal-Available", strconv.FormatBool(decision.IdealAvailable))
+		}
+		if decision.JITPullTriggered {
+			w.Header().Set("X-GLM-JIT-Pull-Triggered", decision.IdealModel)
+		}
+		if decision.InventoryStale {
+			w.Header().Set("X-GLM-JIT-Inventory-Stale", "true")
+		}
 	} else {
 		if req.Model == "" || strings.EqualFold(req.Model, "auto") {
 			req.Model = policyRec.PrimaryModel
@@ -447,6 +477,20 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		outcome = outcome + "|route=" + routingReason
 		if routingClass != "" {
 			outcome = outcome + "|class=" + routingClass
+		}
+		if autoRoute {
+			if idealModel := w.Header().Get("X-GLM-Ideal-Model"); idealModel != "" {
+				outcome = outcome + "|jit_ideal=" + idealModel
+				outcome = outcome + "|jit_ideal_available=" + w.Header().Get("X-GLM-Ideal-Available")
+			}
+			if w.Header().Get("X-GLM-JIT-Pull-Triggered") != "" {
+				outcome = outcome + "|jit_pull_triggered=true"
+			} else {
+				outcome = outcome + "|jit_pull_triggered=false"
+			}
+			if w.Header().Get("X-GLM-JIT-Inventory-Stale") == "true" {
+				outcome = outcome + "|jit_inventory_stale=true"
+			}
 		}
 	}
 	if intentResult.Category != "" {

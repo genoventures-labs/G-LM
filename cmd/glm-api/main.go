@@ -24,6 +24,7 @@ import (
 	"github.com/mike/cognitive-llm/internal/store"
 	"github.com/mike/cognitive-llm/internal/store/memory"
 	"github.com/mike/cognitive-llm/internal/store/pocketbase"
+	"github.com/mike/cognitive-llm/internal/upstream/ollama"
 	"github.com/mike/cognitive-llm/internal/upstream/openwebui"
 )
 
@@ -76,7 +77,24 @@ func main() {
 	}
 
 	upstream := openwebui.New(cfg.UpstreamBaseURL, cfg.UpstreamAPIKey, cfg.UpstreamTimeout, cfg.UpstreamRetryMax)
+	var controlClient *ollama.ControlClient
+	if cfg.JITInventoryEnabled {
+		if strings.TrimSpace(cfg.OllamaControlURL) == "" {
+			log.Printf("jit inventory enabled but GLM_OLLAMA_CONTROL_URL is empty; running fail-open without pull/prune control plane")
+		} else {
+			controlClient = ollama.New(cfg.OllamaControlURL, cfg.OllamaControlAPIKey, cfg.UpstreamTimeout, cfg.UpstreamRetryMax)
+		}
+	}
+	if controlClient != nil {
+		srv := httpapi.NewServer(cfg, st, upstream, controlClient)
+		runServer(cfg, srv)
+		return
+	}
 	srv := httpapi.NewServer(cfg, st, upstream)
+	runServer(cfg, srv)
+}
+
+func runServer(cfg config.Config, srv *httpapi.Server) {
 
 	httpServer := &http.Server{
 		Addr:         cfg.ServerAddr,

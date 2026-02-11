@@ -28,6 +28,20 @@ type Config struct {
 	OrchestratorDefaultModel         string
 	OrchestratorAliases              []string
 	OrchestratorFallback             string
+	JITInventoryEnabled              bool
+	JITReconcileSeconds              int
+	JITReconcileJitterSeconds        int
+	JITMaxModels                     int
+	JITStorageHighWatermark          float64
+	JITStorageTargetWatermark        float64
+	JITPullTimeoutSeconds            int
+	JITPruneEnabled                  bool
+	JITIdealCoding                   string
+	JITIdealExtraction               string
+	JITIdealLightQA                  string
+	JITIdealGeneral                  string
+	OllamaControlURL                 string
+	OllamaControlAPIKey              string
 	StateHistoryWindow               int
 	EmotionalModulationEnabled       bool
 	ReasoningPipelineEnabled         bool
@@ -98,6 +112,20 @@ func Load() Config {
 			env("GLM_ORCHESTRATOR_DEFAULT_ALIASES", "qwen3-8b-instruct-Q4_K_M,qwen3:8b,qwen3-8b,qwen3_8b_instruct_q4_k_m"),
 		),
 		OrchestratorFallback:             env("GLM_ORCHESTRATOR_DEFAULT_FALLBACK", "qwen3:4b"),
+		JITInventoryEnabled:              envBool("GLM_JIT_INVENTORY_ENABLED", true),
+		JITReconcileSeconds:              envInt("GLM_JIT_RECONCILE_SECONDS", 30),
+		JITReconcileJitterSeconds:        envInt("GLM_JIT_RECONCILE_JITTER_SECONDS", 5),
+		JITMaxModels:                     envInt("GLM_JIT_MAX_MODELS", 20),
+		JITStorageHighWatermark:          envFloat("GLM_JIT_STORAGE_HIGH_WATERMARK", 0.85),
+		JITStorageTargetWatermark:        envFloat("GLM_JIT_STORAGE_TARGET_WATERMARK", 0.75),
+		JITPullTimeoutSeconds:            envInt("GLM_JIT_PULL_TIMEOUT_SECONDS", 900),
+		JITPruneEnabled:                  envBool("GLM_JIT_PRUNE_ENABLED", true),
+		JITIdealCoding:                   env("GLM_JIT_IDEAL_CODING", "deepseek-coder:6.7b"),
+		JITIdealExtraction:               env("GLM_JIT_IDEAL_EXTRACTION", "phi3:medium"),
+		JITIdealLightQA:                  env("GLM_JIT_IDEAL_LIGHT_QA", "llama3.2:1b"),
+		JITIdealGeneral:                  env("GLM_JIT_IDEAL_GENERAL", "qwen3-8b-instruct-Q4_K_M"),
+		OllamaControlURL:                 env("GLM_OLLAMA_CONTROL_URL", "http://127.0.0.1:11434"),
+		OllamaControlAPIKey:              env("GLM_OLLAMA_CONTROL_API_KEY", ""),
 		StateHistoryWindow:               envInt("GLM_STATE_HISTORY_WINDOW", 20),
 		EmotionalModulationEnabled:       envBool("GLM_EMOTIONAL_MODULATION_ENABLED", true),
 		ReasoningPipelineEnabled:         envBool("GLM_REASONING_PIPELINE_ENABLED", true),

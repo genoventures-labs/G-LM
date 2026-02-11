@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,39 @@ type fakeUpstream struct {
 	failMultiAgent bool
 	failDirect     bool
 	failToT        bool
+}
+
+type fakeControlClient struct {
+	mu          sync.Mutex
+	models      []string
+	pullCalls   int
+	deleteCalls int
+}
+
+func (f *fakeControlClient) ListModels(ctx context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.models))
+	copy(out, f.models)
+	return out, nil
+}
+
+func (f *fakeControlClient) PullModel(ctx context.Context, model string) error {
+	f.mu.Lock()
+	f.pullCalls++
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeControlClient) DeleteModel(ctx context.Context, model string) error {
+	f.mu.Lock()
+	f.deleteCalls++
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeControlClient) HostStats(ctx context.Context) (uint64, uint64, bool, error) {
+	return 0, 0, false, nil
 }
 
 func (f *fakeUpstream) ListModels(ctx context.Context) (model.ModelListResponse, error) {
@@ -243,6 +277,123 @@ func TestAutoRoutingAddsHeadersAndSelectsModel(t *testing.T) {
 	}
 	if up.lastModelUsed == "" {
 		t.Fatal("expected routed model to be used")
+	}
+}
+
+func TestAutoRoutingJITHeadersWhenIdealMissing(t *testing.T) {
+	st := memory.New()
+	up := &fakeUpstream{models: []string{"mistral:7b", "qwen3:4b"}}
+	ctrl := &fakeControlClient{models: []string{"mistral:7b", "qwen3:4b"}}
+	cfg := config.Config{
+		DefaultModel:              "mistral:7b",
+		RateLimitRPM:              100,
+		ReasoningHiddenByDefault:  true,
+		OrchestratorEnabled:       true,
+		OrchestratorDefaultModel:  "qwen3-8b-instruct-Q4_K_M",
+		OrchestratorAliases:       []string{"qwen3-8b-instruct-Q4_K_M", "qwen3:8b"},
+		OrchestratorFallback:      "qwen3:4b",
+		JITInventoryEnabled:       true,
+		JITReconcileSeconds:       30,
+		JITReconcileJitterSeconds: 0,
+		JITPullTimeoutSeconds:     60,
+		JITMaxModels:              20,
+		JITStorageHighWatermark:   0.85,
+		JITStorageTargetWatermark: 0.75,
+		JITPruneEnabled:           true,
+		JITIdealCoding:            "deepseek-coder:6.7b",
+		JITIdealExtraction:        "phi3:medium",
+		JITIdealLightQA:           "llama3.2:1b",
+		JITIdealGeneral:           "qwen3-8b-instruct-Q4_K_M",
+	}
+	srv := NewServer(cfg, st, up, ctrl)
+	a := auth.NewService(st)
+	tenant, err := st.CreateTenant(context.Background(), "jit-acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeKey, _, err := a.GenerateAPIKey(context.Background(), tenant.ID, []string{"runtime:*"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{
+		"model":    "auto",
+		"messages": []map[string]string{{"role": "user", "content": "Fix this stack trace and implement tests"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Ideal-Model") == "" {
+		t.Fatal("expected ideal model header")
+	}
+	if rr.Header().Get("X-GLM-Ideal-Available") != "false" {
+		t.Fatalf("expected ideal available false, got %q", rr.Header().Get("X-GLM-Ideal-Available"))
+	}
+	if rr.Header().Get("X-GLM-JIT-Pull-Triggered") == "" {
+		t.Fatal("expected jit pull triggered header")
+	}
+}
+
+func TestAutoRoutingJITPullDedupeConcurrent(t *testing.T) {
+	st := memory.New()
+	up := &fakeUpstream{models: []string{"mistral:7b", "qwen3:4b"}}
+	ctrl := &fakeControlClient{models: []string{"mistral:7b", "qwen3:4b"}}
+	cfg := config.Config{
+		DefaultModel:              "mistral:7b",
+		RateLimitRPM:              1000,
+		ReasoningHiddenByDefault:  true,
+		OrchestratorEnabled:       true,
+		OrchestratorDefaultModel:  "qwen3-8b-instruct-Q4_K_M",
+		OrchestratorAliases:       []string{"qwen3-8b-instruct-Q4_K_M", "qwen3:8b"},
+		OrchestratorFallback:      "qwen3:4b",
+		JITInventoryEnabled:       true,
+		JITReconcileSeconds:       30,
+		JITReconcileJitterSeconds: 0,
+		JITPullTimeoutSeconds:     60,
+		JITMaxModels:              20,
+		JITStorageHighWatermark:   0.85,
+		JITStorageTargetWatermark: 0.75,
+		JITPruneEnabled:           true,
+		JITIdealCoding:            "deepseek-coder:6.7b",
+		JITIdealExtraction:        "phi3:medium",
+		JITIdealLightQA:           "llama3.2:1b",
+		JITIdealGeneral:           "qwen3-8b-instruct-Q4_K_M",
+	}
+	srv := NewServer(cfg, st, up, ctrl)
+	a := auth.NewService(st)
+	tenant, err := st.CreateTenant(context.Background(), "jit-concurrent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeKey, _, err := a.GenerateAPIKey(context.Background(), tenant.ID, []string{"runtime:*"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"model":"auto","messages":[{"role":"user","content":"Fix this stack trace and implement tests"}]}`)
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+			req.Header.Set("Authorization", "Bearer "+runtimeKey)
+			rr := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Errorf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+			}
+		}()
+	}
+	wg.Wait()
+	ctrl.mu.Lock()
+	pulls := ctrl.pullCalls
+	ctrl.mu.Unlock()
+	if pulls > 1 {
+		t.Fatalf("expected at most one pull call, got %d", pulls)
 	}
 }
 
