@@ -1,344 +1,157 @@
-# G-LM V1 Gateway
+# G-LM
 
-Enterprise-oriented Go API gateway in front of hosted Ollama/OpenWebUI with PocketBase control plane.
+[![Release](https://img.shields.io/badge/release-v0.1.3-0A66C2)](https://github.com/cassianwolfe/G-LM/releases)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](https://go.dev/)
+[![API](https://img.shields.io/badge/api-OpenAI%20compatible-2B2D42)](#api-surface)
+[![Deployment](https://img.shields.io/badge/deployment-enterprise%20ready-1F6FEB)](#deployment)
 
-## Run
+G-LM is an enterprise LLM gateway for production AI systems.
+
+It provides a single OpenAI-compatible API layer in front of model backends, with policy enforcement, deterministic routing, reasoning orchestration, document synthesis, memory context, symbolic overlays, and external tool calling.
+
+## Why G-LM
+
+- Operational control: centralize routing, policy, auth, audit, and quotas in one gateway.
+- Reliability by design: staged fallbacks, bounded execution, and explicit observability headers.
+- Enterprise governance: tenant isolation, model allowlists, and auditable outcomes.
+- Model portability: keep application contracts stable while changing model providers.
+
+## Core Capabilities
+
+- OpenAI-compatible runtime APIs (`/v1/chat/completions`, `/v1/models`, `/v1/cognition`).
+- Deterministic `model: "auto"` orchestration with JIT inventory management.
+- Reasoning modes: `tot`, `mcts`, `multi_agent` with fail-open handling.
+- Document orchestration: chunking, summarization, cross-doc linking, synthesis context.
+- Session state and memory dynamics for continuity across turns.
+- Symbolic overlays (`assist` and `strict`) with compliance telemetry.
+- Tool calling with external tool server support:
+  - explicit `tools`
+  - `tool_choice: "auto"` schema discovery via `/openapi.json`
+  - per-tool timeout/retry policy
+
+## Architecture
+
+```text
+Client Apps
+  -> G-LM Gateway (this service)
+    -> Upstream LLM Runtime (OpenWebUI/Ollama-compatible)
+    -> PocketBase (tenant/auth/policy/audit/memory)
+    -> External Tool Server (/tools/*)
+```
+
+## API Surface
+
+Runtime endpoints:
+
+- `POST /v1/chat/completions`
+- `POST /v1/cognition`
+- `GET /v1/models`
+
+Operational endpoints:
+
+- `GET /healthz`
+- `GET /readyz`
+- `GET /version`
+
+Admin endpoints:
+
+- `POST /admin/v1/tenants`
+- `POST /admin/v1/tenants/{tenant_id}/keys`
+- `POST /admin/v1/tenants/{tenant_id}/roles`
+- `POST /admin/v1/tenants/{tenant_id}/model-policy`
+- `POST /admin/v1/tenants/{tenant_id}/quotas`
+- `GET /admin/v1/tenants/{tenant_id}/audit-events`
+- `POST /admin/v1/orchestrator/debug`
+- `GET /admin/v1/state/{session_id}`
+
+## Quick Start
+
+### 1) Configure environment
+
+Set the minimum required runtime variables:
+
+- `GLM_UPSTREAM_BASE_URL`
+- `GLM_UPSTREAM_API_KEY`
+- `GLM_POCKETBASE_URL`
+- `GLM_POCKETBASE_IDENTITY`
+- `GLM_POCKETBASE_PASSWORD`
+
+Optional for tool calling:
+
+- `GLM_TOOL_CALLING_ENABLED=true`
+- `GLM_TOOL_SERVER_BASE_URL`
+- `GLM_TOOL_SERVER_API_KEY`
+- `GLM_TOOL_SERVER_CLIENT_ID`
+
+### 2) Run
 
 ```bash
 go run ./cmd/glm-api
 ```
 
-## Bootstrap first admin key
-
-Use this once to mint your initial `glm.*` key:
+### 3) Bootstrap admin key
 
 ```bash
 go run ./cmd/glm-api bootstrap-admin-key --tenant-name acme --expires-hours 720
 ```
 
-For an existing tenant:
-
-```bash
-go run ./cmd/glm-api bootstrap-admin-key --tenant-id TENANT_ID --expires-hours 720
-```
-
-Bootstrap now saves the generated key to a local session file (permissions `0600`) so CLI commands can reuse it until expiry.
-Default session path: `~/.config/glm-api/session.json` (override with `GLM_SESSION_FILE`).
-
-List tenants (to find valid `tenant_id` values):
-
-```bash
-go run ./cmd/glm-api list-tenants --limit 50
-```
-
-Run deployment diagnostics:
-
-```bash
-go run ./cmd/glm-api doctor
-```
-
-Fail CI/shell on any failed check:
+### 4) Validate runtime
 
 ```bash
 go run ./cmd/glm-api doctor --strict
-```
-
-Run one-command smoke test (doctor + local health + runtime chat):
-
-```bash
 ADMIN_KEY='glm....' go run ./cmd/glm-api quick-smoke
 ```
 
-If `--api-key` and `ADMIN_KEY` are both missing, `quick-smoke` will automatically use the saved session key when still valid.
+## Tool Calling Integration
 
-Run V2 style-cognition evaluation (style contract + micro-switch + subtext assist checks):
+G-LM supports OpenAI-style tool calling and external tool execution.
 
-```bash
-go run ./cmd/glm-api eval-v2 --base-url http://localhost:8081
-```
+- If request includes `tools`, G-LM uses provided definitions.
+- If request sets `tool_choice: "auto"` and omits `tools`, G-LM fetches definitions from the configured tool server `/openapi.json`.
+- Tool dispatch targets supported tool endpoints (`/tools/web_search`, `/tools/fetch_url`, `/tools/http_request`, `/tools/vector_retrieve`, `/tools/code_exec_sandbox`).
 
-Run multi-agent stress test (Researcher/Critic debate theme):
+Reference integration contract:
 
-```bash
-go run ./cmd/glm-api stress-multi-agent --base-url http://localhost:8081 --runs 20
-```
+- `docs/toolcall_info.md`
 
-Recommended bounded run (faster, more stable under load):
+## Deployment
 
-```bash
-go run ./cmd/glm-api stress-multi-agent \
-  --base-url http://localhost:8081 \
-  --runs 20 \
-  --multi-agent-max-agents 3 \
-  --multi-agent-max-rounds 1 \
-  --max-tokens 96 \
-  --multi-agent-timeout-ms 30000 \
-  --mcts-timeout-ms 20000 \
-  --multi-agent-budget-tokens 700
-```
+Typical enterprise deployment pattern:
 
-Optional flags:
+- Run G-LM as stateless gateway instances behind an L7 load balancer.
+- Use PocketBase for control-plane/state records.
+- Route to upstream model runtime over private network.
+- Route tool calls to a hardened tool server with per-client credentials.
 
-```bash
-go run ./cmd/glm-api quick-smoke --base-url http://localhost:8081 --model llama3.2:1b --api-key 'glm....'
-```
+Recommended hardening:
 
-To validate auto-routing behavior:
+- Restrict admin APIs to private network or privileged ingress.
+- Rotate API keys and enforce tenant/model allowlists.
+- Enable structured audit retention and centralized log shipping.
+- Keep strict egress policy on tool server paths.
 
-```bash
-go run ./cmd/glm-api quick-smoke --model auto
-```
+## Observability
 
-For slower upstreams:
+G-LM returns execution metadata via headers (routing, reasoning, memory, symbolic overlays, tool-calling). This enables request-level tracing without changing response schema.
 
-```bash
-go run ./cmd/glm-api quick-smoke --timeout-seconds 120 --max-tokens 16
-```
+Use `/admin/v1/tenants/{tenant_id}/audit-events` for governance and post-incident analysis.
 
-Note: bootstrap requires PocketBase service credentials (`GLM_POCKETBASE_IDENTITY`, `GLM_POCKETBASE_PASSWORD`) and writes directly to PocketBase. The app auto-loads `.env` for local runs.
-If you intentionally run without PocketBase auth, set `GLM_POCKETBASE_ALLOW_UNAUTH=true` explicitly.
+## Release and Compatibility
 
-## Required environment variables
+- Current version: `v0.1.3`
+- Contract style: OpenAI-compatible runtime surface
+- Backward compatibility goal: additive evolution of request options and headers
 
-- `GLM_UPSTREAM_BASE_URL` (example: `https://your-openwebui-host`)
-- `GLM_UPSTREAM_API_KEY`
-- `GLM_COGNITION_DEFAULT_MODEL` (default: `llama3.2:1b`, used by `/v1/cognition` when `model` is omitted for non-chat tasks)
-- `GLM_DEFAULT_MAX_TOKENS` (default: `128`, used when request omits `max_tokens`)
-- `GLM_POCKETBASE_URL` (default: `https://pocketbase.thynaptic.com`)
-- `GLM_POCKETBASE_AUTH_COLLECTION` (default: `service_accounts`)
-- `GLM_POCKETBASE_IDENTITY`
-- `GLM_POCKETBASE_PASSWORD`
-- `GLM_POCKETBASE_ALLOW_UNAUTH` (default: `false`)
-- `GLM_ORCHESTRATOR_ENABLED` (default: `true`)
-- `GLM_ORCHESTRATOR_DEFAULT_MODEL` (default: `qwen3-8b-instruct-Q4_K_M`)
-- `GLM_ORCHESTRATOR_DEFAULT_ALIASES` (comma-separated aliases)
-- `GLM_ORCHESTRATOR_DEFAULT_FALLBACK` (default: `qwen3:4b`)
-- `GLM_STATE_HISTORY_WINDOW` (default: `20`)
-- `GLM_EMOTIONAL_MODULATION_ENABLED` (default: `true`)
-- `GLM_REASONING_PIPELINE_ENABLED` (default: `true`)
-- `GLM_REASONING_PIPELINE_DEFAULT_BRANCHES` (default: `3`)
-- `GLM_REASONING_PIPELINE_MAX_BRANCHES` (default: `5`)
-- `GLM_MCTS_ENABLED` (default: `true`)
-- `GLM_MCTS_DEFAULT_ROLLOUTS` (default: `12`)
-- `GLM_MCTS_MAX_ROLLOUTS` (default: `24`)
-- `GLM_MCTS_DEFAULT_DEPTH` (default: `3`)
-- `GLM_MCTS_MAX_DEPTH` (default: `5`)
-- `GLM_MCTS_DEFAULT_EXPLORATION` (default: `1.20`)
-- `GLM_MCTS_STAGE_TIMEOUT_SECONDS` (default: `35`)
-- `GLM_MCTS_FAILOPEN` (default: `true`)
-- `GLM_MULTI_AGENT_ENABLED` (default: `true`)
-- `GLM_MULTI_AGENT_MAX_AGENTS` (default: `4`)
-- `GLM_MULTI_AGENT_MAX_ROUNDS` (default: `2`)
-- `GLM_MULTI_AGENT_STAGE_TIMEOUT_SECONDS` (default: `45`)
-- `GLM_MULTI_AGENT_BUDGET_TOKENS` (default: `700`)
-- `GLM_MULTI_AGENT_FAILOPEN` (default: `true`)
-- `GLM_INTENT_PREPROCESSOR_ENABLED` (default: `true`)
-- `GLM_INTENT_AMBIGUITY_THRESHOLD` (default: `0.62`)
-- `GLM_DOCUMENT_ORCHESTRATION_ENABLED` (default: `true`)
-- `GLM_DOCUMENT_CHUNK_SIZE` (default: `1200`)
-- `GLM_DOCUMENT_MAX_DOCUMENTS` (default: `8`)
-- `GLM_DOCUMENT_MAX_CHUNKS_PER_DOC` (default: `8`)
-- `GLM_DOCUMENT_MAX_LINKS` (default: `12`)
-- `GLM_MEMORY_DYNAMICS_ENABLED` (default: `true`)
-- `GLM_MEMORY_HALF_LIFE_HOURS` (default: `168`)
-- `GLM_MEMORY_REPLAY_THRESHOLD` (default: `0.68`)
-- `GLM_MEMORY_FRESHNESS_WINDOW_HOURS` (default: `72`)
-- `GLM_MEMORY_CONTEXT_NODE_LIMIT` (default: `5`)
-- `GLM_MEMORY_UPDATE_CONCEPTS_PER_TURN` (default: `6`)
-- `GLM_MEMORY_OP_TIMEOUT_SECONDS` (default: `2`)
-- `GLM_REASONING_STAGE_TIMEOUT_SECONDS` (default: `60`)
-- `GLM_DOCUMENT_STAGE_TIMEOUT_SECONDS` (default: `25`)
-- `GLM_STYLE_CONTRACT_ENABLED` (default: `true`)
-- `GLM_STYLE_CONTRACT_VERSION` (default: `v1`)
-- `GLM_SYMBOLIC_OVERLAY_ENABLED` (default: `true`)
-- `GLM_SYMBOLIC_OVERLAY_MAX_SYMBOLS` (default: `48`)
-- `GLM_SYMBOLIC_OVERLAY_MAX_DOC_CHARS` (default: `12000`)
-- `GLM_SYMBOLIC_OVERLAY_STRICT_CHECK` (default: `true`)
-- `GLM_TOOL_CALLING_ENABLED` (default: `false`)
-- `GLM_TOOL_SERVER_BASE_URL` (default: `https://chat.thynaptic.com`)
-- `GLM_TOOL_SERVER_API_KEY`
-- `GLM_TOOL_SERVER_CLIENT_ID`
-- `GLM_TOOL_CALLING_MAX_ITERATIONS` (default: `4`)
-- `GLM_TOOL_CALLING_TIMEOUT_SECONDS` (default: `60`, hard timeout ceiling used with per-tool defaults)
-- `GLM_META_REASONING_ENABLED` (default: `true`)
-- `GLM_META_REASONING_DEFAULT_PROFILE` (default: `default`)
-- `GLM_META_REASONING_ACCEPT_THRESHOLD` (default: `0.72`)
-- `GLM_META_REASONING_STRICT_THRESHOLD` (default: `0.82`)
-- `GLM_SERVER_WRITE_TIMEOUT_SECONDS` (default: `180`)
+## Repository Structure
 
-If PocketBase credentials are missing and `GLM_POCKETBASE_ALLOW_UNAUTH=false`, startup/bootstrap will fail fast with a configuration error.
+- `/cmd/glm-api`: service entrypoint and operational CLI commands
+- `/internal/http`: API server and orchestration pipeline
+- `/internal/orchestrator`: model routing and JIT inventory logic
+- `/internal/reasoning`: ToT, MCTS, and multi-agent execution
+- `/internal/document`: document synthesis orchestration
+- `/internal/toolcalling`: external tool server client and policies
+- `/internal/store`: persistence adapters (including PocketBase)
 
-## Required service account scopes
+## Production Positioning
 
-`service_accounts.scopes` should include at least:
-
-- `tenants:read`, `tenants:write`
-- `api_keys:read`, `api_keys:write`
-- `roles:write` (if using admin role endpoints)
-- `model_policies:read`, `model_policies:write`
-- `quotas:read`, `quotas:write`
-- `idempotency:write` (and optionally `idempotency:read`)
-- `audit:write` (and `audit:read` if listing audit events via admin API)
-- `memory:write` (and `memory:read` for retrieval/replay)
-
-## APIs
-
-- Runtime: `POST /v1/chat/completions`, `GET /v1/models`
-- Unified cognition runtime: `POST /v1/cognition`
-- Admin: `POST /admin/v1/tenants`, `POST /admin/v1/tenants/{tenant_id}/keys`, `POST /admin/v1/tenants/{tenant_id}/roles`, `POST /admin/v1/tenants/{tenant_id}/model-policy`, `POST /admin/v1/tenants/{tenant_id}/quotas`, `GET /admin/v1/tenants/{tenant_id}/audit-events`
-- Ops: `GET /healthz`, `GET /readyz`, `GET /version`
-- Orchestrator debug (admin-scoped): `POST /admin/v1/orchestrator/debug`
-- Session state inspect (admin-scoped): `GET /admin/v1/state/{session_id}`
-
-`POST /v1/chat/completions` supports `model: "auto"` to trigger deterministic orchestrator selection.
-Explicit non-auto `model` values are never overridden.
-State manager supports sticky session context via request `session_id` or `X-Session-ID` header.
-Reasoning pipeline can be enabled per request with `reasoning.mode = "tot"` (or `"auto"`), producing branch/evaluate/synthesis execution with contradiction checks.
-Monte Carlo agent mode is opt-in via `reasoning.mode = "mcts"` and emits `X-GLM-MCTS-*` headers on success; on failures it fail-opens to ToT/direct when enabled.
-Multi-agent mode is opt-in via `reasoning.mode = "multi_agent"` (with `multi_agent_enabled=true`) and emits `X-GLM-MA-*` headers; on failures it fail-opens to MCTS/ToT/direct when enabled.
-Intent preprocessor runs deterministic normalization + ambiguity scoring + intent classification before model execution.
-Document orchestration runs above model execution for multi-document chunking, hierarchical summaries, cross-document linking, and synthesis context injection.
-Tool calling is OpenAI-compatible when request includes `tools`; G-LM executes tool calls via the configured external tool server (`/tools/*`) and feeds tool results back into the model loop.
-When `tool_choice="auto"` and `tools` are omitted, G-LM auto-discovers tool schemas from the tool server `/openapi.json`.
-Tool calling is supported for direct calls and reasoning modes (ToT/MCTS/multi-agent), and applies per-tool timeout/retry policy at runtime.
-Symbolic overlays are opt-in per request (`symbolic_overlay`) and run after intent preprocessing and before document orchestration; strict mode adds fail-open post-response compliance checks.
-Memory dynamics adds PB-backed memory nodes with Go-calculated forgetting/freshness/replay scoring for session continuity.
-
-Example orchestrator debug request:
-
-```bash
-curl -s -X POST http://localhost:8081/admin/v1/orchestrator/debug \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"auto","messages":[{"role":"user","content":"What is DNS?"}]}'
-```
-
-Example session state request:
-
-```bash
-curl -s -X GET http://localhost:8081/admin/v1/state/sess-123 \
-  -H "Authorization: Bearer $ADMIN_KEY"
-```
-
-Example reasoning pipeline request:
-
-```bash
-curl -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"auto","reasoning":{"mode":"tot","branches":3},"messages":[{"role":"user","content":"Design a safe rollout plan and compare alternatives"}]}'
-```
-
-Example MCTS reasoning request:
-
-```bash
-curl -i -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"auto","reasoning":{"mode":"mcts","mcts_max_rollouts":8,"mcts_max_depth":3,"mcts_exploration":1.2},"messages":[{"role":"user","content":"Compare deployment strategies and choose one"}]}'
-```
-
-Example multi-agent reasoning request:
-
-```bash
-curl -i -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"auto","reasoning":{"mode":"multi_agent","multi_agent_enabled":true,"multi_agent_max_agents":4,"multi_agent_max_rounds":2},"messages":[{"role":"user","content":"Compare deployment strategies and choose one"}]}'
-```
-
-Example deterministic intent preprocessing (ambiguous input):
-
-```bash
-curl -i -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"mistral:7b","messages":[{"role":"user","content":"fix this"}]}'
-```
-
-Example document orchestration request:
-
-```bash
-curl -i -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model":"auto",
-    "documents":[
-      {"id":"doc-1","title":"Runbook","text":"Service rollout phases and incident procedures..."},
-      {"id":"doc-2","title":"Policy","text":"Compliance controls, audit checkpoints, and rollback gates..."}
-    ],
-    "messages":[{"role":"user","content":"Synthesize a rollout approach across both docs"}]
-  }'
-```
-
-Example symbolic overlay request (assist):
-
-```bash
-curl -i -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model":"mistral:7b",
-    "symbolic_overlay":{"mode":"assist","types":["logic_map","constraint_set","risk_lens"],"include_documents":true},
-    "documents":[{"id":"doc-1","title":"Runbook","text":"Rollback is required for incidents and compliance checks must not be skipped."}],
-    "messages":[{"role":"user","content":"Design rollout controls and guardrails"}]
-  }'
-```
-
-Unified cognition request spec (single route for chat/reasoning/document/extraction tasks):
-
-```json
-{
-  "task": "chat | reasoning | analysis | document_synthesis | extract | classification",
-  "input": "optional user input",
-  "model": "optional model or auto",
-  "session_id": "optional sticky session id",
-  "response_style": {
-    "breathing_weight": 0.32,
-    "tone_shift": "maintain | stabilize-calm | re-anchor-context",
-    "style_adjustment": "balanced | concise-structured | expanded-guided",
-    "pacing": "steady | fast | slow",
-    "micro_switches": ["mood_shift","topic_drift","pacing_shift"],
-    "mood_shift": 0.18,
-    "topic_drift": 0.52,
-    "subtext_detection": "model-driven",
-    "rolling_sentiment": -0.24,
-    "conversation_drift": 0.52,
-    "risk_flags": ["negative_sentiment_trend","high_topic_drift"]
-  },
-  "messages": [{"role":"user","content":"optional, used instead of input when provided"}],
-  "documents": [{"id":"doc-1","title":"Doc","text":"..."}],
-  "reasoning": {"mode":"tot","branches":3,"meta_enabled":true,"meta_profile":"default"},
-  "symbolic_overlay": {"mode":"assist","types":["logic_map","constraint_set","risk_lens"],"max_symbols":48,"include_state":false,"include_documents":true},
-  "tools": [{"type":"function","function":{"name":"web_search","description":"Search web","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}}],
-  "tool_choice": "auto",
-  "document_orchestration": {"mode":"hierarchical","chunk_size":1200,"max_documents":8},
-  "temperature": 0.2,
-  "max_tokens": 512,
-  "stream": false
-}
-```
-
-When omitted, gateway fills `response_style` deterministically from session cognitive state and emits headers:
-`X-GLM-Response-Style`, `X-GLM-Breathing-Weight`, `X-GLM-Pacing`, `X-GLM-Micro-Switches`, `X-GLM-Risk-Flags`.
-Subtext classification (sarcasm/vulnerability/fatigue) remains model-driven; gateway only supplies assist metrics (`rolling_sentiment`, `conversation_drift`, `risk_flags`).
-Gateway also injects a versioned style contract prompt and exposes it via `X-GLM-Style-Contract`.
-When `symbolic_overlay` is present, gateway emits:
-`X-GLM-Symbolic-Overlay`, `X-GLM-Symbolic-Mode`, `X-GLM-Symbolic-Types`, `X-GLM-Symbolic-Symbols`, and in strict mode `X-GLM-Symbolic-Violations`.
-On fail-open symbolic stage/check errors, gateway sets `X-GLM-Symbolic-Overlay: error` and `X-GLM-Symbolic-Error: true`.
-When `reasoning.meta_enabled=true`, gateway runs deterministic meta-reasoning and emits:
-`X-GLM-Meta-Reasoning`, `X-GLM-Meta-Decision`, `X-GLM-Meta-Confidence`, `X-GLM-Meta-Risk-Score`, `X-GLM-Meta-Profile`.
-
-Example unified cognition call:
-
-```bash
-curl -i -s -X POST http://localhost:8081/v1/cognition \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"task":"reasoning","input":"Compare rollout options and select best","response_style":{"breathing_weight":0.32}}'
-```
-
-## Helm
-
-Helm chart: `deploy/helm/glm-api`
+G-LM is designed as an enterprise control layer for LLM operations, not a model host. It lets platform teams standardize security, observability, and policy while application teams consume a stable OpenAI-compatible API.
