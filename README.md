@@ -1,6 +1,6 @@
 # G-LM
 
-[![Release](https://img.shields.io/badge/release-v0.1.5-0A66C2)](https://github.com/cassianwolfe/G-LM/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.6-0A66C2)](https://github.com/cassianwolfe/G-LM/releases)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](https://go.dev/)
 [![API](https://img.shields.io/badge/api-OpenAI%20compatible-2B2D42)](#api-surface)
 [![Deployment](https://img.shields.io/badge/deployment-enterprise%20ready-1F6FEB)](#deployment)
@@ -123,6 +123,14 @@ Optional for memory-anchored reasoning v1 (strict opt-in):
 - `GLM_MEMORY_ANCHORED_REASONING_MIN_COVERAGE=0.34`
 - `GLM_MEMORY_ANCHORED_REASONING_SCORE_BONUS=0.06`
 
+Optional for symbolic supervision nodes v1 (strict opt-in):
+
+- `GLM_SYMBOLIC_SUPERVISION_ENABLED=false`
+- `GLM_SYMBOLIC_SUPERVISION_WARN_THRESHOLD=1`
+- `GLM_SYMBOLIC_SUPERVISION_REJECT_THRESHOLD=3`
+- `GLM_SYMBOLIC_SUPERVISION_AUTO_REVISE=true`
+- `GLM_SYMBOLIC_SUPERVISION_MAX_PASSES=1`
+
 ### 2) Run
 
 ```bash
@@ -178,7 +186,7 @@ Use `/admin/v1/tenants/{tenant_id}/audit-events` for governance and post-inciden
 
 ## Release and Compatibility
 
-- Current version: `v0.1.5`
+- Current version: `v0.1.6`
 - Contract style: OpenAI-compatible runtime surface
 - Backward compatibility goal: additive evolution of request options and headers
 

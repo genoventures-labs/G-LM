@@ -1917,6 +1917,47 @@ func TestSymbolicOverlayStrictViolationsHeader(t *testing.T) {
 	if rr.Header().Get("X-GLM-Symbolic-Violations") == "" {
 		t.Fatal("expected symbolic violations header")
 	}
+	if rr.Header().Get("X-GLM-Symbolic-Supervision") != "disabled" {
+		t.Fatalf("expected symbolic supervision disabled by default, got %q", rr.Header().Get("X-GLM-Symbolic-Supervision"))
+	}
+}
+
+func TestSymbolicSupervisionStrictAppliedHeaders(t *testing.T) {
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, nil, func(cfg *config.Config) {
+		cfg.SymbolicSupervisionEnabled = true
+		cfg.SymbolicSupervisionWarnThreshold = 1
+		cfg.SymbolicSupervisionRejectThreshold = 3
+		cfg.SymbolicSupervisionAutoRevise = true
+		cfg.SymbolicSupervisionMaxPasses = 1
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode":  "strict",
+			"types": []string{"constraint_set"},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "The plan must include rollback and must not disable security"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Supervision") != "applied" {
+		t.Fatalf("expected symbolic supervision applied, got %q", rr.Header().Get("X-GLM-Symbolic-Supervision"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Supervision-Decision") == "" {
+		t.Fatal("expected symbolic supervision decision header")
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Supervision-Action") == "" {
+		t.Fatal("expected symbolic supervision action header")
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Supervision-Passes") == "" {
+		t.Fatal("expected symbolic supervision passes header")
+	}
 }
 
 func TestSymbolicOverlayPrepareFailureIsFailOpen(t *testing.T) {

@@ -90,16 +90,27 @@ type ContradictionReport struct {
 }
 
 type Trace struct {
-	Mode           string              `json:"mode"`
-	TaskClass      string              `json:"task_class"`
-	ChosenModel    string              `json:"chosen_model"`
-	Branches       []BranchResult      `json:"branches"`
-	Contradictions ContradictionReport `json:"contradictions"`
-	Pruning        *PruningTrace       `json:"pruning,omitempty"`
-	MemoryAnchor   *MemoryAnchorTrace  `json:"memory_anchor,omitempty"`
-	MCTS           *MCTSResult         `json:"mcts,omitempty"`
-	MultiAgent     *MultiAgentResult   `json:"multi_agent,omitempty"`
-	Nodes          []Node              `json:"nodes"`
+	Mode                string                    `json:"mode"`
+	TaskClass           string                    `json:"task_class"`
+	ChosenModel         string                    `json:"chosen_model"`
+	Branches            []BranchResult            `json:"branches"`
+	Contradictions      ContradictionReport       `json:"contradictions"`
+	Pruning             *PruningTrace             `json:"pruning,omitempty"`
+	MemoryAnchor        *MemoryAnchorTrace        `json:"memory_anchor,omitempty"`
+	SymbolicSupervision *SymbolicSupervisionTrace `json:"symbolic_supervision,omitempty"`
+	MCTS                *MCTSResult               `json:"mcts,omitempty"`
+	MultiAgent          *MultiAgentResult         `json:"multi_agent,omitempty"`
+	Nodes               []Node                    `json:"nodes"`
+}
+
+type SymbolicSupervisionTrace struct {
+	Enabled    bool   `json:"enabled"`
+	Decision   string `json:"decision,omitempty"`
+	Action     string `json:"action,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Nodes      int    `json:"nodes,omitempty"`
+	Violations int    `json:"violations,omitempty"`
+	Passes     int    `json:"passes,omitempty"`
 }
 
 type MemoryAnchorTrace struct {

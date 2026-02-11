@@ -290,3 +290,53 @@ func TestLoadMemoryAnchoredReasoningFromEnv(t *testing.T) {
 		t.Fatalf("expected score bonus 0.1, got %f", cfg.MemoryAnchoredReasoningScoreBonus)
 	}
 }
+
+func TestLoadSymbolicSupervisionDefaults(t *testing.T) {
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_ENABLED", "")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_WARN_THRESHOLD", "")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_REJECT_THRESHOLD", "")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_AUTO_REVISE", "")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_MAX_PASSES", "")
+
+	cfg := Load()
+	if cfg.SymbolicSupervisionEnabled {
+		t.Fatal("expected symbolic supervision disabled by default")
+	}
+	if cfg.SymbolicSupervisionWarnThreshold != 1 {
+		t.Fatalf("expected warn threshold 1, got %d", cfg.SymbolicSupervisionWarnThreshold)
+	}
+	if cfg.SymbolicSupervisionRejectThreshold != 3 {
+		t.Fatalf("expected reject threshold 3, got %d", cfg.SymbolicSupervisionRejectThreshold)
+	}
+	if !cfg.SymbolicSupervisionAutoRevise {
+		t.Fatal("expected auto revise default true")
+	}
+	if cfg.SymbolicSupervisionMaxPasses != 1 {
+		t.Fatalf("expected max passes 1, got %d", cfg.SymbolicSupervisionMaxPasses)
+	}
+}
+
+func TestLoadSymbolicSupervisionFromEnv(t *testing.T) {
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_ENABLED", "true")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_WARN_THRESHOLD", "2")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_REJECT_THRESHOLD", "4")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_AUTO_REVISE", "false")
+	t.Setenv("GLM_SYMBOLIC_SUPERVISION_MAX_PASSES", "0")
+
+	cfg := Load()
+	if !cfg.SymbolicSupervisionEnabled {
+		t.Fatal("expected symbolic supervision enabled")
+	}
+	if cfg.SymbolicSupervisionWarnThreshold != 2 {
+		t.Fatalf("expected warn threshold 2, got %d", cfg.SymbolicSupervisionWarnThreshold)
+	}
+	if cfg.SymbolicSupervisionRejectThreshold != 4 {
+		t.Fatalf("expected reject threshold 4, got %d", cfg.SymbolicSupervisionRejectThreshold)
+	}
+	if cfg.SymbolicSupervisionAutoRevise {
+		t.Fatal("expected auto revise false from env")
+	}
+	if cfg.SymbolicSupervisionMaxPasses != 0 {
+		t.Fatalf("expected max passes 0, got %d", cfg.SymbolicSupervisionMaxPasses)
+	}
+}

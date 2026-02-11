@@ -105,6 +105,11 @@ type Config struct {
 	SymbolicOverlayMaxSymbols          int
 	SymbolicOverlayMaxDocChars         int
 	SymbolicOverlayStrictCheck         bool
+	SymbolicSupervisionEnabled         bool
+	SymbolicSupervisionWarnThreshold   int
+	SymbolicSupervisionRejectThreshold int
+	SymbolicSupervisionAutoRevise      bool
+	SymbolicSupervisionMaxPasses       int
 	ToolCallingEnabled                 bool
 	ToolServerBaseURL                  string
 	ToolServerAPIKey                   string
@@ -224,6 +229,11 @@ func Load() Config {
 		SymbolicOverlayMaxSymbols:          envInt("GLM_SYMBOLIC_OVERLAY_MAX_SYMBOLS", 48),
 		SymbolicOverlayMaxDocChars:         envInt("GLM_SYMBOLIC_OVERLAY_MAX_DOC_CHARS", 12000),
 		SymbolicOverlayStrictCheck:         envBool("GLM_SYMBOLIC_OVERLAY_STRICT_CHECK", true),
+		SymbolicSupervisionEnabled:         envBool("GLM_SYMBOLIC_SUPERVISION_ENABLED", false),
+		SymbolicSupervisionWarnThreshold:   envInt("GLM_SYMBOLIC_SUPERVISION_WARN_THRESHOLD", 1),
+		SymbolicSupervisionRejectThreshold: envInt("GLM_SYMBOLIC_SUPERVISION_REJECT_THRESHOLD", 3),
+		SymbolicSupervisionAutoRevise:      envBool("GLM_SYMBOLIC_SUPERVISION_AUTO_REVISE", true),
+		SymbolicSupervisionMaxPasses:       envInt("GLM_SYMBOLIC_SUPERVISION_MAX_PASSES", 1),
 		ToolCallingEnabled:                 envBool("GLM_TOOL_CALLING_ENABLED", false),
 		ToolServerBaseURL:                  env("GLM_TOOL_SERVER_BASE_URL", "https://chat.thynaptic.com"),
 		ToolServerAPIKey:                   env("GLM_TOOL_SERVER_API_KEY", ""),

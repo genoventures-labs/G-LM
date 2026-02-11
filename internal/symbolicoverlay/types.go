@@ -59,3 +59,27 @@ type ComplianceResult struct {
 	Warnings       []string `json:"warnings,omitempty"`
 	Score          float64  `json:"score"`
 }
+
+type SupervisionNode struct {
+	NodeID     string  `json:"node_id"`
+	NodeType   string  `json:"node_type"`
+	Severity   string  `json:"severity,omitempty"`
+	Score      float64 `json:"score,omitempty"`
+	Decision   string  `json:"decision,omitempty"`
+	Action     string  `json:"action,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	Source     string  `json:"source,omitempty"`
+	Violations int     `json:"violations,omitempty"`
+}
+
+type SupervisionResult struct {
+	Enabled         bool              `json:"enabled"`
+	Applied         bool              `json:"applied"`
+	Decision        string            `json:"decision"`
+	Action          string            `json:"action"`
+	Reason          string            `json:"reason,omitempty"`
+	Passes          int               `json:"passes"`
+	ViolationCount  int               `json:"violation_count,omitempty"`
+	ComplianceScore float64           `json:"compliance_score,omitempty"`
+	Nodes           []SupervisionNode `json:"nodes,omitempty"`
+}

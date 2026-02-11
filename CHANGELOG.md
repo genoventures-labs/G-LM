@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.1.5] - 2026-02-11
+## [0.1.6] - 2026-02-11
 
 ### Added
 - Memory-anchored reasoning v1 telemetry headers:
@@ -16,12 +16,26 @@ All notable changes to this project are documented in this file.
   - `GLM_MEMORY_ANCHORED_REASONING_MAX_ANCHORS`
   - `GLM_MEMORY_ANCHORED_REASONING_MIN_COVERAGE`
   - `GLM_MEMORY_ANCHORED_REASONING_SCORE_BONUS`
+- Symbolic supervision node telemetry headers:
+  - `X-GLM-Symbolic-Supervision`
+  - `X-GLM-Symbolic-Supervision-Decision`
+  - `X-GLM-Symbolic-Supervision-Action`
+  - `X-GLM-Symbolic-Supervision-Reason`
+  - `X-GLM-Symbolic-Supervision-Nodes`
+  - `X-GLM-Symbolic-Supervision-Passes`
+- New optional symbolic supervision configuration surface:
+  - `GLM_SYMBOLIC_SUPERVISION_ENABLED`
+  - `GLM_SYMBOLIC_SUPERVISION_WARN_THRESHOLD`
+  - `GLM_SYMBOLIC_SUPERVISION_REJECT_THRESHOLD`
+  - `GLM_SYMBOLIC_SUPERVISION_AUTO_REVISE`
+  - `GLM_SYMBOLIC_SUPERVISION_MAX_PASSES`
 
 ### Changed
 - Reasoning modes (`tot`, `mcts`, `multi_agent`) can now consume memory anchor keys from memory dynamics as deterministic prompt hints (strict opt-in).
 - Candidate evaluation now supports bounded anchor-coverage score bonus when memory-anchored reasoning is enabled.
 - Reasoning traces now include memory-anchor aggregation metadata (`enabled/applied`, anchor counts, average coverage/bonus).
 - Existing behavior remains fail-open and backward-compatible when memory anchors are unavailable or feature is disabled.
+- Symbolic strict mode now includes a supervision-node decision layer (`accept|caution|reject` with `none|warn|revise|reject` actions), optional single-pass revise/recheck, and fail-open retention of original responses on supervision errors.
 
 ## [0.1.4] - 2026-02-11
 

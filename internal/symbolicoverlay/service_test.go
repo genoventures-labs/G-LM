@@ -62,3 +62,60 @@ func TestCheckCompliance(t *testing.T) {
 		t.Fatal("expected violations")
 	}
 }
+
+func TestSuperviseDisabled(t *testing.T) {
+	svc := New(Config{Enabled: true, SupervisionEnabled: false})
+	res := svc.Supervise(ComplianceResult{Checked: true, ViolationCount: 2, Score: 0.4})
+	if res.Decision != "disabled" || res.Action != "none" {
+		t.Fatalf("expected disabled/none, got %q/%q", res.Decision, res.Action)
+	}
+}
+
+func TestSuperviseWarnAndRevise(t *testing.T) {
+	svc := New(Config{
+		Enabled:                    true,
+		SupervisionEnabled:         true,
+		SupervisionWarnThreshold:   1,
+		SupervisionRejectThreshold: 3,
+		SupervisionAutoRevise:      true,
+		SupervisionMaxPasses:       1,
+	})
+	res := svc.Supervise(ComplianceResult{
+		Checked:        true,
+		ViolationCount: 1,
+		Warnings:       []string{"missing_required_constraint:rollback"},
+		Score:          0.8,
+	})
+	if res.Decision != "caution" {
+		t.Fatalf("expected caution, got %q", res.Decision)
+	}
+	if res.Action != "revise" {
+		t.Fatalf("expected revise action, got %q", res.Action)
+	}
+	if len(res.Nodes) == 0 {
+		t.Fatal("expected supervision nodes")
+	}
+}
+
+func TestSuperviseReject(t *testing.T) {
+	svc := New(Config{
+		Enabled:                    true,
+		SupervisionEnabled:         true,
+		SupervisionWarnThreshold:   1,
+		SupervisionRejectThreshold: 2,
+		SupervisionAutoRevise:      true,
+		SupervisionMaxPasses:       1,
+	})
+	res := svc.Supervise(ComplianceResult{
+		Checked:        true,
+		ViolationCount: 3,
+		Warnings:       []string{"explicit_contradiction:disable security"},
+		Score:          0.2,
+	})
+	if res.Decision != "reject" {
+		t.Fatalf("expected reject, got %q", res.Decision)
+	}
+	if res.Action != "reject" {
+		t.Fatalf("expected reject action, got %q", res.Action)
+	}
+}

@@ -180,10 +180,15 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 			Version: cfg.StyleContractVersion,
 		}),
 		symbolic: symbolicoverlay.New(symbolicoverlay.Config{
-			Enabled:      cfg.SymbolicOverlayEnabled,
-			MaxSymbols:   cfg.SymbolicOverlayMaxSymbols,
-			MaxDocChars:  cfg.SymbolicOverlayMaxDocChars,
-			StrictChecks: cfg.SymbolicOverlayStrictCheck,
+			Enabled:                    cfg.SymbolicOverlayEnabled,
+			MaxSymbols:                 cfg.SymbolicOverlayMaxSymbols,
+			MaxDocChars:                cfg.SymbolicOverlayMaxDocChars,
+			StrictChecks:               cfg.SymbolicOverlayStrictCheck,
+			SupervisionEnabled:         cfg.SymbolicSupervisionEnabled,
+			SupervisionWarnThreshold:   cfg.SymbolicSupervisionWarnThreshold,
+			SupervisionRejectThreshold: cfg.SymbolicSupervisionRejectThreshold,
+			SupervisionAutoRevise:      cfg.SymbolicSupervisionAutoRevise,
+			SupervisionMaxPasses:       cfg.SymbolicSupervisionMaxPasses,
 		}),
 		tools:    toolcalling.New(cfg.ToolServerBaseURL, cfg.ToolServerAPIKey, cfg.ToolServerClientID, time.Duration(cfg.ToolCallingTimeoutSeconds)*time.Second),
 		state:    state.NewManager(cfg.StateHistoryWindow),
@@ -253,7 +258,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.5"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.6"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +371,14 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	symbolicError := false
 	symbolicViolations := 0
 	symbolicArtifact := symbolicoverlay.OverlayArtifact{}
+	symbolicSupervisionStatus := "disabled"
+	symbolicSupervision := symbolicoverlay.SupervisionResult{
+		Enabled:  false,
+		Applied:  false,
+		Decision: "disabled",
+		Action:   "none",
+		Reason:   "not_applicable",
+	}
 	if symbolicRequested {
 		preparedReq, symbolicRes, symErr := s.symbolic.Prepare(req, stateSnapshot)
 		if symErr != nil {
@@ -894,6 +907,62 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		} else if comp.Checked {
 			symbolicViolations = comp.ViolationCount
 			w.Header().Set("X-GLM-Symbolic-Violations", strconv.Itoa(comp.ViolationCount))
+			symbolicSupervision = s.symbolic.Supervise(comp)
+			if symbolicSupervision.Enabled {
+				symbolicSupervisionStatus = "applied"
+				if symbolicSupervision.Action == "revise" {
+					symbolicSupervision.Passes = 1
+					revReq := buildSymbolicSupervisionRevisionRequest(req, usedModel, resp, symbolicArtifact, comp, symbolicSupervision)
+					revResp, revErr := execUpstream.ChatCompletions(ctx, revReq)
+					if revErr != nil {
+						symbolicSupervisionStatus = "error"
+						symbolicError = true
+						symbolicSupervision.Reason = "upstream_error"
+					} else {
+						revComp, revCompErr := s.symbolic.CheckCompliance(req, revResp, symbolicArtifact)
+						if revCompErr != nil {
+							symbolicSupervisionStatus = "error"
+							symbolicError = true
+							symbolicSupervision.Reason = "compliance_error"
+						} else {
+							revSupervision := s.symbolic.Supervise(revComp)
+							revSupervision.Passes = 1
+							if shouldAdoptSymbolicRevision(comp, revComp, symbolicSupervision, revSupervision) {
+								resp = revResp
+								comp = revComp
+								symbolicSupervision = revSupervision
+								symbolicViolations = comp.ViolationCount
+								w.Header().Set("X-GLM-Symbolic-Violations", strconv.Itoa(comp.ViolationCount))
+							}
+						}
+					}
+				}
+			} else {
+				if symbolicSupervision.Decision == "disabled" {
+					symbolicSupervisionStatus = "disabled"
+				} else {
+					symbolicSupervisionStatus = "skipped"
+				}
+			}
+		}
+	}
+	if symbolicRequested {
+		w.Header().Set("X-GLM-Symbolic-Supervision", symbolicSupervisionStatus)
+		w.Header().Set("X-GLM-Symbolic-Supervision-Decision", symbolicSupervision.Decision)
+		w.Header().Set("X-GLM-Symbolic-Supervision-Action", symbolicSupervision.Action)
+		w.Header().Set("X-GLM-Symbolic-Supervision-Reason", symbolicSupervision.Reason)
+		w.Header().Set("X-GLM-Symbolic-Supervision-Nodes", strconv.Itoa(len(symbolicSupervision.Nodes)))
+		w.Header().Set("X-GLM-Symbolic-Supervision-Passes", strconv.Itoa(symbolicSupervision.Passes))
+		if reasoningTrace != nil {
+			reasoningTrace.SymbolicSupervision = &reasoning.SymbolicSupervisionTrace{
+				Enabled:    symbolicSupervision.Enabled,
+				Decision:   symbolicSupervision.Decision,
+				Action:     symbolicSupervision.Action,
+				Reason:     symbolicSupervision.Reason,
+				Nodes:      len(symbolicSupervision.Nodes),
+				Violations: symbolicSupervision.ViolationCount,
+				Passes:     symbolicSupervision.Passes,
+			}
 		}
 	}
 	if symbolicRequested {
@@ -904,7 +973,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			"|symbolic_mode=" + symbolicMode +
 			"|symbolic_types=" + symbolicTypes +
 			"|symbolic_violations=" + strconv.Itoa(symbolicViolations) +
-			"|symbolic_error=" + strconv.FormatBool(symbolicError)
+			"|symbolic_error=" + strconv.FormatBool(symbolicError) +
+			"|symbolic_supervision=" + symbolicSupervisionStatus +
+			"|symbolic_supervision_decision=" + symbolicSupervision.Decision +
+			"|symbolic_supervision_action=" + symbolicSupervision.Action
 	} else {
 		outcome = outcome + "|symbolic=false"
 	}
@@ -1061,6 +1133,96 @@ func shouldAdoptReflected(before, after metareasoning.Result) bool {
 }
 
 func metaDecisionRank(decision string) int {
+	switch strings.ToLower(strings.TrimSpace(decision)) {
+	case "accept":
+		return 2
+	case "caution":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func buildSymbolicSupervisionRevisionRequest(
+	req model.ChatCompletionRequest,
+	usedModel string,
+	original model.ChatCompletionResponse,
+	artifact symbolicoverlay.OverlayArtifact,
+	comp symbolicoverlay.ComplianceResult,
+	sup symbolicoverlay.SupervisionResult,
+) model.ChatCompletionRequest {
+	revisionReq := req
+	revisionReq.Model = strings.TrimSpace(usedModel)
+	if revisionReq.Model == "" {
+		revisionReq.Model = req.Model
+	}
+	revisionReq.Tools = nil
+	revisionReq.ToolChoice = nil
+	revisionReq.Stream = false
+	revisionReq.Messages = buildSymbolicSupervisionMessages(req, original, artifact, comp, sup)
+	return revisionReq
+}
+
+func buildSymbolicSupervisionMessages(
+	req model.ChatCompletionRequest,
+	original model.ChatCompletionResponse,
+	artifact symbolicoverlay.OverlayArtifact,
+	comp symbolicoverlay.ComplianceResult,
+	sup symbolicoverlay.SupervisionResult,
+) []model.Message {
+	userPrompt := strings.TrimSpace(joinUserContent(req.Messages))
+	if userPrompt == "" {
+		userPrompt = "No user prompt captured."
+	}
+	originalAnswer := strings.TrimSpace(firstAssistantContent(original))
+	if originalAnswer == "" {
+		originalAnswer = "No assistant answer generated."
+	}
+	artifactJSON, _ := json.Marshal(artifact)
+	content := "Revise the assistant response to better satisfy symbolic constraints and risk signals.\n" +
+		"Preserve user intent and avoid mentioning this supervision process.\n\n" +
+		"User request:\n" + userPrompt + "\n\n" +
+		"Current response:\n" + originalAnswer + "\n\n" +
+		"Supervision decision: " + sup.Decision + "\n" +
+		"Supervision action: " + sup.Action + "\n" +
+		"Supervision reason: " + sup.Reason + "\n" +
+		"Compliance violations: " + strconv.Itoa(comp.ViolationCount) + "\n" +
+		"Compliance score: " + formatFloat(comp.Score) + "\n\n" +
+		"Symbolic artifact:\n" + string(artifactJSON) + "\n\n" +
+		"Return one improved final answer only."
+	return []model.Message{
+		{
+			Role:    "system",
+			Content: "You are a symbolic supervision reviser. Improve policy-consistency, constraints adherence, and risk handling without changing user intent.",
+		},
+		{
+			Role:    "user",
+			Content: content,
+		},
+	}
+}
+
+func shouldAdoptSymbolicRevision(
+	before symbolicoverlay.ComplianceResult,
+	after symbolicoverlay.ComplianceResult,
+	beforeSup symbolicoverlay.SupervisionResult,
+	afterSup symbolicoverlay.SupervisionResult,
+) bool {
+	beforeRank := symbolicDecisionRank(beforeSup.Decision)
+	afterRank := symbolicDecisionRank(afterSup.Decision)
+	if afterRank > beforeRank {
+		return true
+	}
+	if after.ViolationCount < before.ViolationCount {
+		return true
+	}
+	if afterRank == beforeRank && (after.Score-before.Score) >= 0.05 {
+		return true
+	}
+	return false
+}
+
+func symbolicDecisionRank(decision string) int {
 	switch strings.ToLower(strings.TrimSpace(decision)) {
 	case "accept":
 		return 2
