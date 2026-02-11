@@ -228,3 +228,164 @@ func TestMultiAgentFallsBackToBaselineWhenRoundFails(t *testing.T) {
 		t.Fatal("expected response model")
 	}
 }
+
+func TestMultiAgentSelfEvaluateDisabledUsesNeutralScores(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                true,
+		MultiAgentEnabled:      true,
+		MultiAgentMaxAgents:    4,
+		MultiAgentMaxRounds:    2,
+		MultiAgentBudgetTokens: 1200,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:                "multi_agent",
+			MultiAgentEnabled:   true,
+			SelfEvaluate:        false,
+			MultiAgentMaxAgents: 4,
+			MultiAgentMaxRounds: 2,
+		},
+		Messages: []model.Message{{Role: "user", Content: "provide a plan"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "coding", TopicDrift: 0.8, MoodShift: 0.8, MicroSwitches: []string{"shift"}}
+
+	_, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if trace.MultiAgent == nil {
+		t.Fatal("expected multi-agent trace")
+	}
+	if trace.MultiAgent.Score != 0.5 {
+		t.Fatalf("expected neutral winner score 0.5, got %f", trace.MultiAgent.Score)
+	}
+	for _, b := range trace.Branches {
+		if b.EvaluationScore != 0.5 {
+			t.Fatalf("expected neutral branch score 0.5, got %f", b.EvaluationScore)
+		}
+	}
+}
+
+func TestMultiAgentCurveEnabledAffectsWinnerScore(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                 true,
+		MultiAgentEnabled:       true,
+		SelfEvalCurveEnabled:    true,
+		SelfEvalCurveLowMax:     0.60,
+		SelfEvalCurveMidMax:     0.82,
+		SelfEvalCurveLowWeight:  0.90,
+		SelfEvalCurveMidWeight:  1.20,
+		SelfEvalCurveHighWeight: 1.08,
+		MultiAgentMaxAgents:     4,
+		MultiAgentMaxRounds:     2,
+		MultiAgentBudgetTokens:  1200,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:              "multi_agent",
+			MultiAgentEnabled: true,
+			SelfEvaluate:      true,
+		},
+		Messages: []model.Message{{Role: "user", Content: "provide a plan"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "coding"}
+
+	_, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if trace.MultiAgent == nil {
+		t.Fatal("expected multi-agent trace")
+	}
+	if trace.MultiAgent.Score <= 0.71 {
+		t.Fatalf("expected curved winner score above legacy mid score, got %f", trace.MultiAgent.Score)
+	}
+}
+
+func TestMultiAgentPruningRoundAndSynthCaps(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                true,
+		MultiAgentEnabled:      true,
+		PruningEnabled:         true,
+		PruningMinScore:        0.0,
+		PruningMARoundTopK:     2,
+		PruningMASynthTopK:     1,
+		MultiAgentMaxAgents:    4,
+		MultiAgentMaxRounds:    2,
+		MultiAgentBudgetTokens: 1200,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:              "multi_agent",
+			MultiAgentEnabled: true,
+		},
+		Messages: []model.Message{{Role: "user", Content: "provide a plan"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "general"}
+
+	_, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if len(trace.Branches) != 1 {
+		t.Fatalf("expected synth top-k=1 branch, got %d", len(trace.Branches))
+	}
+	if trace.Pruning == nil {
+		t.Fatal("expected pruning trace")
+	}
+	if trace.Pruning.CandidatesOut != 1 {
+		t.Fatalf("expected pruning out=1, got %d", trace.Pruning.CandidatesOut)
+	}
+}
+
+func TestMultiAgentPruningNoSurvivorsFallsBackBaseline(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                true,
+		MultiAgentEnabled:      true,
+		PruningEnabled:         true,
+		PruningMinScore:        0.95,
+		PruningMARoundTopK:     2,
+		PruningMASynthTopK:     1,
+		MultiAgentMaxAgents:    4,
+		MultiAgentMaxRounds:    2,
+		MultiAgentBudgetTokens: 1200,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:              "multi_agent",
+			MultiAgentEnabled: true,
+		},
+		Messages: []model.Message{{Role: "user", Content: "provide a plan"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "general"}
+
+	_, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if trace.MultiAgent == nil {
+		t.Fatal("expected multi-agent trace")
+	}
+	if trace.MultiAgent.Winner == "" {
+		t.Fatal("expected winner after baseline fallback")
+	}
+	if len(trace.Branches) == 0 {
+		t.Fatal("expected at least one branch after baseline fallback")
+	}
+}

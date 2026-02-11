@@ -70,6 +70,7 @@ func (e *Executor) executeMultiAgent(
 
 	nodes := []Node{}
 	candidates := []agentResult{}
+	var pruneAggregate pruneStats
 	tokenBudgetUsed := 0
 	roundsRun := 0
 	roleMaxTokens := e.resolveMultiAgentRoleMaxTokens(req, cfg)
@@ -106,6 +107,22 @@ func (e *Executor) executeMultiAgent(
 			}
 			return candidates[i].Score > candidates[j].Score
 		})
+		if e.cfg.PruningEnabled {
+			pruned, stats := e.pruneMultiAgentCandidates(candidates, e.cfg.PruningMARoundTopK)
+			candidates = pruned
+			pruneAggregate = pruneAggregate.merge(stats)
+			if len(candidates) == 0 {
+				baseline, baselineNode, baselineErr := e.multiAgentBaselineCandidate(ctx, up, req, baseModel, st, maxInt(1, round), roleMaxTokens)
+				nodes = append(nodes, baselineNode)
+				if baselineErr != nil {
+					trace.Nodes = nodes
+					return model.ChatCompletionResponse{}, trace, fmt.Errorf("multi-agent failed: pruning removed all candidates and baseline fallback failed")
+				}
+				candidates = append(candidates, baseline)
+				roundsRun = maxInt(1, round)
+				break
+			}
+		}
 		if e.multiAgentConsensus(candidates) != "low" {
 			break
 		}
@@ -129,19 +146,37 @@ func (e *Executor) executeMultiAgent(
 		return candidates[i].Score > candidates[j].Score
 	})
 
-	top := minInt(3, len(candidates))
+	synthCandidates := append([]agentResult{}, candidates...)
+	if e.cfg.PruningEnabled {
+		pruned, stats := e.pruneMultiAgentCandidates(synthCandidates, e.cfg.PruningMASynthTopK)
+		pruneAggregate = pruneAggregate.merge(stats)
+		if len(pruned) == 0 {
+			baseline, baselineNode, baselineErr := e.multiAgentBaselineCandidate(ctx, up, req, baseModel, st, maxInt(1, roundsRun), roleMaxTokens)
+			nodes = append(nodes, baselineNode)
+			if baselineErr != nil {
+				trace.Nodes = nodes
+				return model.ChatCompletionResponse{}, trace, fmt.Errorf("multi-agent failed: no pruned synthesis candidates and baseline fallback failed")
+			}
+			synthCandidates = []agentResult{baseline}
+			candidates = append(candidates, baseline)
+		} else {
+			synthCandidates = pruned
+		}
+	}
+
+	top := minInt(3, len(synthCandidates))
 	branchResults := make([]BranchResult, 0, top)
 	for i := 0; i < top; i++ {
 		branchResults = append(branchResults, BranchResult{
 			Index:            i + 1,
 			Model:            baseModel,
-			Output:           candidates[i].Output,
-			EvaluationScore:  candidates[i].Score,
-			EvaluationReason: "multi_agent:" + candidates[i].Role,
+			Output:           synthCandidates[i].Output,
+			EvaluationScore:  synthCandidates[i].Score,
+			EvaluationReason: "multi_agent:" + synthCandidates[i].Role,
 		})
 	}
 	contradictions := detectContradictions(branchResults)
-	consensus := e.multiAgentConsensus(candidates)
+	consensus := e.multiAgentConsensus(synthCandidates)
 
 	synthNode := Node{
 		ID:        "multi-agent-synthesizer",
@@ -149,7 +184,7 @@ func (e *Executor) executeMultiAgent(
 		Model:     baseModel,
 		StartedAt: time.Now().UTC(),
 		Metadata: map[string]any{
-			"winner":    candidates[0].Role,
+			"winner":    synthCandidates[0].Role,
 			"consensus": consensus,
 		},
 	}
@@ -158,7 +193,7 @@ func (e *Executor) executeMultiAgent(
 	if v := e.resolveMultiAgentSynthesisMaxTokens(req); v > 0 {
 		synthReq.MaxTokens = &v
 	}
-	synthReq.Messages = buildMultiAgentSynthesisMessages(req.Messages, candidates[:top], contradictions)
+	synthReq.Messages = buildMultiAgentSynthesisMessages(req.Messages, synthCandidates[:top], contradictions)
 	finalResp, synthErr := up.ChatCompletions(ctx, synthReq)
 	synthNode.EndedAt = time.Now().UTC()
 	if synthErr != nil {
@@ -170,9 +205,9 @@ func (e *Executor) executeMultiAgent(
 		trace.MultiAgent = &MultiAgentResult{
 			Agents:    len(roles) + 1,
 			Rounds:    maxInt(1, roundsRun),
-			Winner:    candidates[0].Role,
+			Winner:    synthCandidates[0].Role,
 			Consensus: consensus,
-			Score:     candidates[0].Score,
+			Score:     synthCandidates[0].Score,
 		}
 		return model.ChatCompletionResponse{}, trace, fmt.Errorf("multi-agent synthesis failed: %w", synthErr)
 	}
@@ -181,12 +216,22 @@ func (e *Executor) executeMultiAgent(
 	trace.Nodes = nodes
 	trace.Branches = branchResults
 	trace.Contradictions = contradictions
+	trace.Pruning = &PruningTrace{
+		Mode:            "multi_agent",
+		Enabled:         e.cfg.PruningEnabled,
+		MinScore:        e.cfg.PruningMinScore,
+		TopK:            e.cfg.PruningMASynthTopK,
+		CandidatesIn:    pruneAggregate.CandidatesIn,
+		CandidatesOut:   len(synthCandidates),
+		DroppedLowScore: pruneAggregate.DroppedLowScore,
+		DroppedTopK:     pruneAggregate.DroppedTopK,
+	}
 	trace.MultiAgent = &MultiAgentResult{
 		Agents:    len(roles) + 1,
 		Rounds:    maxInt(1, roundsRun),
-		Winner:    candidates[0].Role,
+		Winner:    synthCandidates[0].Role,
 		Consensus: consensus,
-		Score:     candidates[0].Score,
+		Score:     synthCandidates[0].Score,
 	}
 	return finalResp, trace, nil
 }
@@ -242,8 +287,7 @@ func (e *Executor) runMultiAgentRound(
 				return
 			}
 			output := extractAssistantText(resp)
-			score, _ := e.selfEvaluate(output, st)
-			score = applyMCTSStatePenalty(score, st)
+			score, _ := e.evaluateOutput(req, output, st, true)
 			node.Score = score
 			tokens := estimateTokens(output)
 			outCh <- roundOut{
@@ -476,8 +520,7 @@ func (e *Executor) multiAgentBaselineCandidate(
 		return agentResult{}, node, err
 	}
 	output := extractAssistantText(resp)
-	score, _ := e.selfEvaluate(output, st)
-	score = applyMCTSStatePenalty(score, st)
+	score, _ := e.evaluateOutput(req, output, st, true)
 	node.Score = score
 	return agentResult{
 		Role:   "baseline",

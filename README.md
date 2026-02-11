@@ -1,6 +1,6 @@
 # G-LM
 
-[![Release](https://img.shields.io/badge/release-v0.1.3-0A66C2)](https://github.com/cassianwolfe/G-LM/releases)
+[![Release](https://img.shields.io/badge/release-v0.1.4-0A66C2)](https://github.com/cassianwolfe/G-LM/releases)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](https://go.dev/)
 [![API](https://img.shields.io/badge/api-OpenAI%20compatible-2B2D42)](#api-surface)
 [![Deployment](https://img.shields.io/badge/deployment-enterprise%20ready-1F6FEB)](#deployment)
@@ -83,6 +83,39 @@ Optional for tool calling:
 - `GLM_TOOL_SERVER_API_KEY`
 - `GLM_TOOL_SERVER_CLIENT_ID`
 
+Optional for reasoning self-evaluation weighting curve (global defaults, opt-in):
+
+- `GLM_SELF_EVAL_CURVE_ENABLED=false`
+- `GLM_SELF_EVAL_CURVE_LOW_MAX=0.60`
+- `GLM_SELF_EVAL_CURVE_MID_MAX=0.82`
+- `GLM_SELF_EVAL_CURVE_LOW_WEIGHT=0.90`
+- `GLM_SELF_EVAL_CURVE_MID_WEIGHT=1.00`
+- `GLM_SELF_EVAL_CURVE_HIGH_WEIGHT=1.08`
+- `GLM_SELF_EVAL_CURVE_BIAS=0.00`
+
+Optional for reasoning graph pruning (latency/cost oriented):
+
+- `GLM_REASONING_PRUNING_ENABLED=true`
+- `GLM_REASONING_PRUNING_MIN_SCORE=0.55`
+- `GLM_REASONING_PRUNING_TOT_TOPK=3`
+- `GLM_REASONING_PRUNING_TOT_SYNTH_TOPK=2`
+- `GLM_REASONING_PRUNING_MCTS_POOL_TOPK=6`
+- `GLM_REASONING_PRUNING_MCTS_SYNTH_TOPK=3`
+- `GLM_REASONING_PRUNING_MA_ROUND_TOPK=4`
+- `GLM_REASONING_PRUNING_MA_SYNTH_TOPK=3`
+
+Optional for MCTS v2 quality mode (backward-compatible, opt-in):
+
+- `GLM_MCTS_V2_ENABLED=false`
+- `GLM_MCTS_EARLY_STOP_WINDOW=4`
+- `GLM_MCTS_EARLY_STOP_DELTA=0.01`
+
+Optional for meta reflection v2 (strict opt-in):
+
+- `GLM_META_REFLECTION_ENABLED=false`
+- `GLM_META_REFLECTION_MAX_PASSES=1`
+- `GLM_META_REFLECTION_TRIGGER_DECISIONS=caution,reject`
+
 ### 2) Run
 
 ```bash
@@ -138,7 +171,7 @@ Use `/admin/v1/tenants/{tenant_id}/audit-events` for governance and post-inciden
 
 ## Release and Compatibility
 
-- Current version: `v0.1.3`
+- Current version: `v0.1.4`
 - Contract style: OpenAI-compatible runtime surface
 - Backward compatibility goal: additive evolution of request options and headers
 

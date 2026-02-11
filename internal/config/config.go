@@ -47,12 +47,30 @@ type Config struct {
 	ReasoningPipelineEnabled         bool
 	ReasoningPipelineDefaultBranches int
 	ReasoningPipelineMaxBranches     int
+	ReasoningPruningEnabled          bool
+	ReasoningPruningMinScore         float64
+	ReasoningPruningToTTopK          int
+	ReasoningPruningToTSynthTopK     int
+	ReasoningPruningMCTSPoolTopK     int
+	ReasoningPruningMCTSSynthTopK    int
+	ReasoningPruningMARoundTopK      int
+	ReasoningPruningMASynthTopK      int
+	SelfEvalCurveEnabled             bool
+	SelfEvalCurveLowMax              float64
+	SelfEvalCurveMidMax              float64
+	SelfEvalCurveLowWeight           float64
+	SelfEvalCurveMidWeight           float64
+	SelfEvalCurveHighWeight          float64
+	SelfEvalCurveBias                float64
 	MCTSEnabled                      bool
 	MCTSDefaultRollouts              int
 	MCTSMaxRollouts                  int
 	MCTSDefaultDepth                 int
 	MCTSMaxDepth                     int
 	MCTSDefaultExploration           float64
+	MCTSV2Enabled                    bool
+	MCTSEarlyStopWindow              int
+	MCTSEarlyStopDelta               float64
 	MCTSStageTimeout                 time.Duration
 	MCTSFailOpen                     bool
 	MultiAgentEnabled                bool
@@ -93,6 +111,9 @@ type Config struct {
 	MetaReasoningDefaultProfile      string
 	MetaReasoningAcceptThreshold     float64
 	MetaReasoningStrictThreshold     float64
+	MetaReflectionEnabled            bool
+	MetaReflectionMaxPasses          int
+	MetaReflectionTriggerDecisions   []string
 	RateLimitRPM                     int
 	AuditRetentionDays               int
 	ReasoningHiddenByDefault         bool
@@ -141,12 +162,30 @@ func Load() Config {
 		ReasoningPipelineEnabled:         envBool("GLM_REASONING_PIPELINE_ENABLED", true),
 		ReasoningPipelineDefaultBranches: envInt("GLM_REASONING_PIPELINE_DEFAULT_BRANCHES", 3),
 		ReasoningPipelineMaxBranches:     envInt("GLM_REASONING_PIPELINE_MAX_BRANCHES", 5),
+		ReasoningPruningEnabled:          envBool("GLM_REASONING_PRUNING_ENABLED", true),
+		ReasoningPruningMinScore:         envFloat("GLM_REASONING_PRUNING_MIN_SCORE", 0.55),
+		ReasoningPruningToTTopK:          envInt("GLM_REASONING_PRUNING_TOT_TOPK", 3),
+		ReasoningPruningToTSynthTopK:     envInt("GLM_REASONING_PRUNING_TOT_SYNTH_TOPK", 2),
+		ReasoningPruningMCTSPoolTopK:     envInt("GLM_REASONING_PRUNING_MCTS_POOL_TOPK", 6),
+		ReasoningPruningMCTSSynthTopK:    envInt("GLM_REASONING_PRUNING_MCTS_SYNTH_TOPK", 3),
+		ReasoningPruningMARoundTopK:      envInt("GLM_REASONING_PRUNING_MA_ROUND_TOPK", 4),
+		ReasoningPruningMASynthTopK:      envInt("GLM_REASONING_PRUNING_MA_SYNTH_TOPK", 3),
+		SelfEvalCurveEnabled:             envBool("GLM_SELF_EVAL_CURVE_ENABLED", false),
+		SelfEvalCurveLowMax:              envFloat("GLM_SELF_EVAL_CURVE_LOW_MAX", 0.60),
+		SelfEvalCurveMidMax:              envFloat("GLM_SELF_EVAL_CURVE_MID_MAX", 0.82),
+		SelfEvalCurveLowWeight:           envFloat("GLM_SELF_EVAL_CURVE_LOW_WEIGHT", 0.90),
+		SelfEvalCurveMidWeight:           envFloat("GLM_SELF_EVAL_CURVE_MID_WEIGHT", 1.00),
+		SelfEvalCurveHighWeight:          envFloat("GLM_SELF_EVAL_CURVE_HIGH_WEIGHT", 1.08),
+		SelfEvalCurveBias:                envFloat("GLM_SELF_EVAL_CURVE_BIAS", 0.00),
 		MCTSEnabled:                      envBool("GLM_MCTS_ENABLED", true),
 		MCTSDefaultRollouts:              envInt("GLM_MCTS_DEFAULT_ROLLOUTS", 12),
 		MCTSMaxRollouts:                  envInt("GLM_MCTS_MAX_ROLLOUTS", 24),
 		MCTSDefaultDepth:                 envInt("GLM_MCTS_DEFAULT_DEPTH", 3),
 		MCTSMaxDepth:                     envInt("GLM_MCTS_MAX_DEPTH", 5),
 		MCTSDefaultExploration:           envFloat("GLM_MCTS_DEFAULT_EXPLORATION", 1.20),
+		MCTSV2Enabled:                    envBool("GLM_MCTS_V2_ENABLED", false),
+		MCTSEarlyStopWindow:              envInt("GLM_MCTS_EARLY_STOP_WINDOW", 4),
+		MCTSEarlyStopDelta:               envFloat("GLM_MCTS_EARLY_STOP_DELTA", 0.01),
 		MCTSStageTimeout:                 time.Duration(envInt("GLM_MCTS_STAGE_TIMEOUT_SECONDS", 35)) * time.Second,
 		MCTSFailOpen:                     envBool("GLM_MCTS_FAILOPEN", true),
 		MultiAgentEnabled:                envBool("GLM_MULTI_AGENT_ENABLED", true),
@@ -187,6 +226,9 @@ func Load() Config {
 		MetaReasoningDefaultProfile:      env("GLM_META_REASONING_DEFAULT_PROFILE", "default"),
 		MetaReasoningAcceptThreshold:     envFloat("GLM_META_REASONING_ACCEPT_THRESHOLD", 0.72),
 		MetaReasoningStrictThreshold:     envFloat("GLM_META_REASONING_STRICT_THRESHOLD", 0.82),
+		MetaReflectionEnabled:            envBool("GLM_META_REFLECTION_ENABLED", false),
+		MetaReflectionMaxPasses:          envInt("GLM_META_REFLECTION_MAX_PASSES", 1),
+		MetaReflectionTriggerDecisions:   splitCSV(env("GLM_META_REFLECTION_TRIGGER_DECISIONS", "caution,reject")),
 		RateLimitRPM:                     envInt("GLM_RATE_LIMIT_RPM", 120),
 		AuditRetentionDays:               envInt("GLM_AUDIT_RETENTION_DAYS", 90),
 		ReasoningHiddenByDefault:         envBool("GLM_REASONING_HIDDEN_DEFAULT", true),

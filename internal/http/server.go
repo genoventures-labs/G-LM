@@ -114,19 +114,37 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 		audit:   audit.NewService(st),
 		router:  router,
 		reasoner: reasoning.NewExecutor(reasoning.Config{
-			Enabled:                cfg.ReasoningPipelineEnabled,
-			DefaultBranches:        cfg.ReasoningPipelineDefaultBranches,
-			MaxBranches:            cfg.ReasoningPipelineMaxBranches,
-			MCTSEnabled:            cfg.MCTSEnabled,
-			MCTSDefaultRollouts:    cfg.MCTSDefaultRollouts,
-			MCTSMaxRollouts:        cfg.MCTSMaxRollouts,
-			MCTSDefaultDepth:       cfg.MCTSDefaultDepth,
-			MCTSMaxDepth:           cfg.MCTSMaxDepth,
-			MCTSDefaultExploration: cfg.MCTSDefaultExploration,
-			MultiAgentEnabled:      cfg.MultiAgentEnabled,
-			MultiAgentMaxAgents:    cfg.MultiAgentMaxAgents,
-			MultiAgentMaxRounds:    cfg.MultiAgentMaxRounds,
-			MultiAgentBudgetTokens: cfg.MultiAgentBudgetTokens,
+			Enabled:                 cfg.ReasoningPipelineEnabled,
+			DefaultBranches:         cfg.ReasoningPipelineDefaultBranches,
+			MaxBranches:             cfg.ReasoningPipelineMaxBranches,
+			PruningEnabled:          cfg.ReasoningPruningEnabled,
+			PruningMinScore:         cfg.ReasoningPruningMinScore,
+			PruningToTTopK:          cfg.ReasoningPruningToTTopK,
+			PruningToTSynthTopK:     cfg.ReasoningPruningToTSynthTopK,
+			PruningMCTSPoolTopK:     cfg.ReasoningPruningMCTSPoolTopK,
+			PruningMCTSSynthTopK:    cfg.ReasoningPruningMCTSSynthTopK,
+			PruningMARoundTopK:      cfg.ReasoningPruningMARoundTopK,
+			PruningMASynthTopK:      cfg.ReasoningPruningMASynthTopK,
+			SelfEvalCurveEnabled:    cfg.SelfEvalCurveEnabled,
+			SelfEvalCurveLowMax:     cfg.SelfEvalCurveLowMax,
+			SelfEvalCurveMidMax:     cfg.SelfEvalCurveMidMax,
+			SelfEvalCurveLowWeight:  cfg.SelfEvalCurveLowWeight,
+			SelfEvalCurveMidWeight:  cfg.SelfEvalCurveMidWeight,
+			SelfEvalCurveHighWeight: cfg.SelfEvalCurveHighWeight,
+			SelfEvalCurveBias:       cfg.SelfEvalCurveBias,
+			MCTSEnabled:             cfg.MCTSEnabled,
+			MCTSDefaultRollouts:     cfg.MCTSDefaultRollouts,
+			MCTSMaxRollouts:         cfg.MCTSMaxRollouts,
+			MCTSDefaultDepth:        cfg.MCTSDefaultDepth,
+			MCTSMaxDepth:            cfg.MCTSMaxDepth,
+			MCTSDefaultExploration:  cfg.MCTSDefaultExploration,
+			MCTSV2Enabled:           cfg.MCTSV2Enabled,
+			MCTSEarlyStopWindow:     cfg.MCTSEarlyStopWindow,
+			MCTSEarlyStopDelta:      cfg.MCTSEarlyStopDelta,
+			MultiAgentEnabled:       cfg.MultiAgentEnabled,
+			MultiAgentMaxAgents:     cfg.MultiAgentMaxAgents,
+			MultiAgentMaxRounds:     cfg.MultiAgentMaxRounds,
+			MultiAgentBudgetTokens:  cfg.MultiAgentBudgetTokens,
 		}, router),
 		docflow: document.New(document.Config{
 			Enabled:           cfg.DocumentOrchestrationEnabled,
@@ -231,7 +249,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.3"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.4"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -597,6 +615,13 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 						w.Header().Set("X-GLM-MCTS-Rollouts", strconv.Itoa(trace.MCTS.Rollouts))
 						w.Header().Set("X-GLM-MCTS-Depth", strconv.Itoa(trace.MCTS.Depth))
 						w.Header().Set("X-GLM-MCTS-Best-Score", formatFloat(trace.MCTS.BestScore))
+						w.Header().Set("X-GLM-MCTS-Rollouts-Executed", strconv.Itoa(trace.MCTS.RolloutsExecuted))
+						w.Header().Set("X-GLM-MCTS-Early-Stop", strconv.FormatBool(trace.MCTS.EarlyStop))
+						if mctsV2EnabledForRequest(req, s.cfg) {
+							w.Header().Set("X-GLM-MCTS-V2", "enabled")
+						} else {
+							w.Header().Set("X-GLM-MCTS-V2", "disabled")
+						}
 					}
 					outcome = outcome + "|ma_fallback=mcts"
 					if trace.ChosenModel != "" {
@@ -700,6 +725,13 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("X-GLM-MCTS-Rollouts", strconv.Itoa(trace.MCTS.Rollouts))
 					w.Header().Set("X-GLM-MCTS-Depth", strconv.Itoa(trace.MCTS.Depth))
 					w.Header().Set("X-GLM-MCTS-Best-Score", formatFloat(trace.MCTS.BestScore))
+					w.Header().Set("X-GLM-MCTS-Rollouts-Executed", strconv.Itoa(trace.MCTS.RolloutsExecuted))
+					w.Header().Set("X-GLM-MCTS-Early-Stop", strconv.FormatBool(trace.MCTS.EarlyStop))
+					if mctsV2EnabledForRequest(req, s.cfg) {
+						w.Header().Set("X-GLM-MCTS-V2", "enabled")
+					} else {
+						w.Header().Set("X-GLM-MCTS-V2", "disabled")
+					}
 					outcome = outcome +
 						"|pipeline=mcts" +
 						"|mcts_rollouts=" + strconv.Itoa(trace.MCTS.Rollouts) +
@@ -736,6 +768,16 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		err = toolErr
 	}
+	if reasoningTrace != nil && reasoningTrace.Pruning != nil {
+		if reasoningTrace.Pruning.Enabled {
+			w.Header().Set("X-GLM-Reasoning-Pruning", "enabled")
+		} else {
+			w.Header().Set("X-GLM-Reasoning-Pruning", "disabled")
+		}
+		w.Header().Set("X-GLM-Reasoning-Prune-In", strconv.Itoa(reasoningTrace.Pruning.CandidatesIn))
+		w.Header().Set("X-GLM-Reasoning-Prune-Out", strconv.Itoa(reasoningTrace.Pruning.CandidatesOut))
+		w.Header().Set("X-GLM-Reasoning-Prune-Dropped", strconv.Itoa(reasoningTrace.Pruning.DroppedLowScore+reasoningTrace.Pruning.DroppedTopK))
+	}
 	if err != nil && policyRec.FallbackModel != "" && policyRec.FallbackModel != req.Model {
 		fallbackReq := req
 		fallbackReq.Model = policyRec.FallbackModel
@@ -766,17 +808,61 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		metaResult, metaErr := safeMetaEvaluate(s.meta, req, resp, reasoningTrace, stateSnapshot)
 		if metaErr != nil {
 			w.Header().Set("X-GLM-Meta-Reasoning", "error")
+			w.Header().Set("X-GLM-Meta-Reflection", "error")
+			w.Header().Set("X-GLM-Meta-Reflection-Passes", "0")
+			w.Header().Set("X-GLM-Meta-Reflection-Reason", "upstream_error")
 		} else {
+			reflectionStatus := "disabled"
+			reflectionPasses := 0
+			reflectionReason := "no_trigger"
+			finalMeta := metaResult
+			reflectionEnabled := metaReflectionEnabledForRequest(req, s.cfg)
+			if reflectionEnabled {
+				reflectionStatus = "skipped"
+				if shouldTriggerReflection(metaResult, req, s.cfg) {
+					maxPasses := metaReflectionPassesForRequest(req, s.cfg)
+					if maxPasses < 1 {
+						reflectionStatus = "skipped"
+						reflectionReason = "budget_guard"
+					} else {
+						reflectionPasses = 1
+						reflectionReason = "decision_trigger"
+						revisionReq := buildMetaReflectionRequest(req, usedModel, resp, metaResult)
+						revisedResp, reviseErr := execUpstream.ChatCompletions(ctx, revisionReq)
+						if reviseErr != nil {
+							reflectionStatus = "error"
+							reflectionReason = "upstream_error"
+						} else {
+							revisedMeta, revisedMetaErr := safeMetaEvaluate(s.meta, req, revisedResp, reasoningTrace, stateSnapshot)
+							if revisedMetaErr != nil {
+								reflectionStatus = "error"
+								reflectionReason = "upstream_error"
+							} else if shouldAdoptReflected(metaResult, revisedMeta) {
+								resp = revisedResp
+								finalMeta = revisedMeta
+								reflectionStatus = "applied"
+							}
+						}
+					}
+				}
+			}
+
 			w.Header().Set("X-GLM-Meta-Reasoning", "enabled")
-			w.Header().Set("X-GLM-Meta-Decision", metaResult.Decision)
-			w.Header().Set("X-GLM-Meta-Confidence", formatFloat(metaResult.Confidence))
-			w.Header().Set("X-GLM-Meta-Risk-Score", formatFloat(metaResult.RiskScore))
-			w.Header().Set("X-GLM-Meta-Profile", metaResult.Profile)
+			w.Header().Set("X-GLM-Meta-Decision", finalMeta.Decision)
+			w.Header().Set("X-GLM-Meta-Confidence", formatFloat(finalMeta.Confidence))
+			w.Header().Set("X-GLM-Meta-Risk-Score", formatFloat(finalMeta.RiskScore))
+			w.Header().Set("X-GLM-Meta-Profile", finalMeta.Profile)
+			w.Header().Set("X-GLM-Meta-Reflection", reflectionStatus)
+			w.Header().Set("X-GLM-Meta-Reflection-Passes", strconv.Itoa(reflectionPasses))
+			w.Header().Set("X-GLM-Meta-Reflection-Reason", reflectionReason)
 			outcome = outcome +
-				"|meta_decision=" + metaResult.Decision +
-				"|meta_conf=" + formatFloat(metaResult.Confidence) +
-				"|meta_risk=" + formatFloat(metaResult.RiskScore) +
-				"|meta_profile=" + metaResult.Profile
+				"|meta_decision=" + finalMeta.Decision +
+				"|meta_conf=" + formatFloat(finalMeta.Confidence) +
+				"|meta_risk=" + formatFloat(finalMeta.RiskScore) +
+				"|meta_profile=" + finalMeta.Profile +
+				"|meta_reflection=" + reflectionStatus +
+				"|meta_reflection_reason=" + reflectionReason +
+				"|meta_reflection_passes=" + strconv.Itoa(reflectionPasses)
 		}
 	}
 	if symbolicRequested && symbolicMode == "strict" && symbolicApplied {
@@ -832,6 +918,138 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func mctsV2EnabledForRequest(req model.ChatCompletionRequest, cfg config.Config) bool {
+	if req.Reasoning != nil && req.Reasoning.MCTSV2Enabled {
+		return true
+	}
+	return cfg.MCTSV2Enabled
+}
+
+func metaReflectionEnabledForRequest(req model.ChatCompletionRequest, cfg config.Config) bool {
+	if req.Reasoning != nil && req.Reasoning.MetaReflectionEnabled {
+		return true
+	}
+	return cfg.MetaReflectionEnabled
+}
+
+func metaReflectionPassesForRequest(req model.ChatCompletionRequest, cfg config.Config) int {
+	passes := cfg.MetaReflectionMaxPasses
+	if req.Reasoning != nil && req.Reasoning.MetaReflectionMaxPasses > 0 {
+		passes = req.Reasoning.MetaReflectionMaxPasses
+	}
+	if passes < 1 {
+		passes = 1
+	}
+	if passes > 1 {
+		passes = 1
+	}
+	return passes
+}
+
+func shouldTriggerReflection(meta metareasoning.Result, req model.ChatCompletionRequest, cfg config.Config) bool {
+	if !metaReflectionEnabledForRequest(req, cfg) {
+		return false
+	}
+	decision := strings.ToLower(strings.TrimSpace(meta.Decision))
+	if decision == "" {
+		return false
+	}
+	allowed := map[string]struct{}{}
+	for _, item := range cfg.MetaReflectionTriggerDecisions {
+		v := strings.ToLower(strings.TrimSpace(item))
+		if v == "" {
+			continue
+		}
+		allowed[v] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		allowed["caution"] = struct{}{}
+		allowed["reject"] = struct{}{}
+	}
+	_, ok := allowed[decision]
+	return ok
+}
+
+func buildMetaReflectionRequest(
+	req model.ChatCompletionRequest,
+	usedModel string,
+	original model.ChatCompletionResponse,
+	meta metareasoning.Result,
+) model.ChatCompletionRequest {
+	revisionReq := req
+	revisionReq.Model = strings.TrimSpace(usedModel)
+	if revisionReq.Model == "" {
+		revisionReq.Model = req.Model
+	}
+	revisionReq.Tools = nil
+	revisionReq.ToolChoice = nil
+	revisionReq.Stream = false
+	revisionReq.Messages = buildMetaReflectionMessages(req, original, meta)
+	return revisionReq
+}
+
+func buildMetaReflectionMessages(
+	req model.ChatCompletionRequest,
+	original model.ChatCompletionResponse,
+	meta metareasoning.Result,
+) []model.Message {
+	userPrompt := strings.TrimSpace(joinUserContent(req.Messages))
+	if userPrompt == "" {
+		userPrompt = "No user prompt captured."
+	}
+	originalAnswer := strings.TrimSpace(firstAssistantContent(original))
+	if originalAnswer == "" {
+		originalAnswer = "No assistant answer generated."
+	}
+	flags := "none"
+	if len(meta.Flags) > 0 {
+		flags = strings.Join(meta.Flags, ", ")
+	}
+	content := "Revise the assistant answer using this evaluator feedback.\n" +
+		"Keep user intent unchanged. Improve clarity, consistency, and risk handling.\n" +
+		"Do not mention this review process.\n\n" +
+		"User request:\n" + userPrompt + "\n\n" +
+		"Current answer:\n" + originalAnswer + "\n\n" +
+		"Evaluator decision: " + meta.Decision + "\n" +
+		"Evaluator risk: " + formatFloat(meta.RiskScore) + "\n" +
+		"Evaluator confidence: " + formatFloat(meta.Confidence) + "\n" +
+		"Evaluator flags: " + flags + "\n\n" +
+		"Return one improved final answer only."
+	return []model.Message{
+		{
+			Role:    "system",
+			Content: "You are a careful assistant revising a prior answer for quality and safety while preserving intent.",
+		},
+		{
+			Role:    "user",
+			Content: content,
+		},
+	}
+}
+
+func shouldAdoptReflected(before, after metareasoning.Result) bool {
+	beforeRank := metaDecisionRank(before.Decision)
+	afterRank := metaDecisionRank(after.Decision)
+	if afterRank > beforeRank {
+		return true
+	}
+	if afterRank == beforeRank && (before.RiskScore-after.RiskScore) >= 0.03 {
+		return true
+	}
+	return false
+}
+
+func metaDecisionRank(decision string) int {
+	switch strings.ToLower(strings.TrimSpace(decision)) {
+	case "accept":
+		return 2
+	case "caution":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (s *Server) cognition(w http.ResponseWriter, r *http.Request) {

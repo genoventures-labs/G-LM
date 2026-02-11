@@ -21,19 +21,37 @@ type Upstream interface {
 }
 
 type Config struct {
-	Enabled                bool
-	DefaultBranches        int
-	MaxBranches            int
-	MCTSEnabled            bool
-	MCTSDefaultRollouts    int
-	MCTSMaxRollouts        int
-	MCTSDefaultDepth       int
-	MCTSMaxDepth           int
-	MCTSDefaultExploration float64
-	MultiAgentEnabled      bool
-	MultiAgentMaxAgents    int
-	MultiAgentMaxRounds    int
-	MultiAgentBudgetTokens int
+	Enabled                 bool
+	DefaultBranches         int
+	MaxBranches             int
+	PruningEnabled          bool
+	PruningMinScore         float64
+	PruningToTTopK          int
+	PruningToTSynthTopK     int
+	PruningMCTSPoolTopK     int
+	PruningMCTSSynthTopK    int
+	PruningMARoundTopK      int
+	PruningMASynthTopK      int
+	SelfEvalCurveEnabled    bool
+	SelfEvalCurveLowMax     float64
+	SelfEvalCurveMidMax     float64
+	SelfEvalCurveLowWeight  float64
+	SelfEvalCurveMidWeight  float64
+	SelfEvalCurveHighWeight float64
+	SelfEvalCurveBias       float64
+	MCTSEnabled             bool
+	MCTSDefaultRollouts     int
+	MCTSMaxRollouts         int
+	MCTSDefaultDepth        int
+	MCTSMaxDepth            int
+	MCTSDefaultExploration  float64
+	MCTSV2Enabled           bool
+	MCTSEarlyStopWindow     int
+	MCTSEarlyStopDelta      float64
+	MultiAgentEnabled       bool
+	MultiAgentMaxAgents     int
+	MultiAgentMaxRounds     int
+	MultiAgentBudgetTokens  int
 }
 
 type Executor struct {
@@ -73,16 +91,38 @@ type Trace struct {
 	ChosenModel    string              `json:"chosen_model"`
 	Branches       []BranchResult      `json:"branches"`
 	Contradictions ContradictionReport `json:"contradictions"`
+	Pruning        *PruningTrace       `json:"pruning,omitempty"`
 	MCTS           *MCTSResult         `json:"mcts,omitempty"`
 	MultiAgent     *MultiAgentResult   `json:"multi_agent,omitempty"`
 	Nodes          []Node              `json:"nodes"`
 }
 
+type PruningTrace struct {
+	Mode            string  `json:"mode"`
+	Enabled         bool    `json:"enabled"`
+	MinScore        float64 `json:"min_score"`
+	TopK            int     `json:"top_k"`
+	CandidatesIn    int     `json:"candidates_in"`
+	CandidatesOut   int     `json:"candidates_out"`
+	DroppedLowScore int     `json:"dropped_low_score"`
+	DroppedTopK     int     `json:"dropped_top_k"`
+}
+
+type pruneStats struct {
+	CandidatesIn    int
+	CandidatesOut   int
+	DroppedLowScore int
+	DroppedTopK     int
+}
+
 type MCTSResult struct {
-	Rollouts  int     `json:"rollouts"`
-	Depth     int     `json:"depth"`
-	BestScore float64 `json:"best_score"`
-	Fallback  string  `json:"fallback,omitempty"`
+	Rollouts         int     `json:"rollouts"`
+	RolloutsExecuted int     `json:"rollouts_executed,omitempty"`
+	Depth            int     `json:"depth"`
+	BestScore        float64 `json:"best_score"`
+	EarlyStop        bool    `json:"early_stop,omitempty"`
+	EarlyStopReason  string  `json:"early_stop_reason,omitempty"`
+	Fallback         string  `json:"fallback,omitempty"`
 }
 
 type MultiAgentResult struct {
@@ -101,6 +141,71 @@ func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
 	if cfg.MaxBranches <= 0 {
 		cfg.MaxBranches = 5
 	}
+	if !cfg.PruningEnabled &&
+		cfg.PruningMinScore == 0 &&
+		cfg.PruningToTTopK == 0 &&
+		cfg.PruningToTSynthTopK == 0 &&
+		cfg.PruningMCTSPoolTopK == 0 &&
+		cfg.PruningMCTSSynthTopK == 0 &&
+		cfg.PruningMARoundTopK == 0 &&
+		cfg.PruningMASynthTopK == 0 {
+		cfg.PruningEnabled = true
+	}
+	if cfg.PruningMinScore < 0 {
+		cfg.PruningMinScore = 0
+	}
+	if cfg.PruningMinScore > 1 {
+		cfg.PruningMinScore = 1
+	}
+	if cfg.PruningToTTopK <= 0 {
+		cfg.PruningToTTopK = 3
+	}
+	if cfg.PruningToTSynthTopK <= 0 {
+		cfg.PruningToTSynthTopK = 2
+	}
+	if cfg.PruningToTSynthTopK > cfg.PruningToTTopK {
+		cfg.PruningToTSynthTopK = cfg.PruningToTTopK
+	}
+	if cfg.PruningMCTSPoolTopK <= 0 {
+		cfg.PruningMCTSPoolTopK = 6
+	}
+	if cfg.PruningMCTSSynthTopK <= 0 {
+		cfg.PruningMCTSSynthTopK = 3
+	}
+	if cfg.PruningMCTSSynthTopK > cfg.PruningMCTSPoolTopK {
+		cfg.PruningMCTSSynthTopK = cfg.PruningMCTSPoolTopK
+	}
+	if cfg.PruningMARoundTopK <= 0 {
+		cfg.PruningMARoundTopK = 4
+	}
+	if cfg.PruningMASynthTopK <= 0 {
+		cfg.PruningMASynthTopK = 3
+	}
+	if cfg.PruningMASynthTopK > cfg.PruningMARoundTopK {
+		cfg.PruningMASynthTopK = cfg.PruningMARoundTopK
+	}
+	if cfg.SelfEvalCurveLowMax <= 0 || cfg.SelfEvalCurveLowMax >= 1 {
+		cfg.SelfEvalCurveLowMax = 0.60
+	}
+	if cfg.SelfEvalCurveMidMax <= 0 || cfg.SelfEvalCurveMidMax >= 1 {
+		cfg.SelfEvalCurveMidMax = 0.82
+	}
+	if cfg.SelfEvalCurveMidMax <= cfg.SelfEvalCurveLowMax {
+		cfg.SelfEvalCurveMidMax = 0.82
+		if cfg.SelfEvalCurveMidMax <= cfg.SelfEvalCurveLowMax {
+			cfg.SelfEvalCurveLowMax = 0.60
+			cfg.SelfEvalCurveMidMax = 0.82
+		}
+	}
+	if cfg.SelfEvalCurveLowWeight <= 0 {
+		cfg.SelfEvalCurveLowWeight = 0.90
+	}
+	if cfg.SelfEvalCurveMidWeight <= 0 {
+		cfg.SelfEvalCurveMidWeight = 1.00
+	}
+	if cfg.SelfEvalCurveHighWeight <= 0 {
+		cfg.SelfEvalCurveHighWeight = 1.08
+	}
 	if cfg.MCTSDefaultRollouts <= 0 {
 		cfg.MCTSDefaultRollouts = 12
 	}
@@ -115,6 +220,15 @@ func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
 	}
 	if cfg.MCTSDefaultExploration <= 0 {
 		cfg.MCTSDefaultExploration = 1.2
+	}
+	if cfg.MCTSEarlyStopWindow < 2 {
+		cfg.MCTSEarlyStopWindow = 4
+	}
+	if cfg.MCTSEarlyStopDelta < 0 {
+		cfg.MCTSEarlyStopDelta = 0
+	}
+	if cfg.MCTSEarlyStopDelta > 0.2 {
+		cfg.MCTSEarlyStopDelta = 0.2
 	}
 	if cfg.MultiAgentMaxAgents <= 0 {
 		cfg.MultiAgentMaxAgents = 4
@@ -223,6 +337,8 @@ func (e *Executor) executeToT(
 
 	branches := e.resolveBranches(req)
 	branchResults := make([]BranchResult, 0, branches)
+	allSuccessful := make([]BranchResult, 0, branches)
+	var pruneAggregate pruneStats
 	allNodes := make([]Node, 0, branches+4)
 
 	for i := 0; i < branches; i++ {
@@ -238,7 +354,7 @@ func (e *Executor) executeToT(
 			continue
 		}
 		output := extractAssistantText(resp)
-		score, reason := e.selfEvaluate(output, st)
+		score, reason := e.evaluateOutput(req, output, st, false)
 		node.Score = score
 		node.Metadata = map[string]any{"evaluation_reason": reason}
 		allNodes = append(allNodes, node)
@@ -250,26 +366,66 @@ func (e *Executor) executeToT(
 			EvaluationReason: reason,
 			Warnings:         branchWarnings(output),
 		})
+		allSuccessful = append(allSuccessful, branchResults[len(branchResults)-1])
+		if e.cfg.PruningEnabled {
+			pruned, stats := e.pruneToTAccumulated(branchResults)
+			branchResults = pruned
+			pruneAggregate = pruneAggregate.merge(stats)
+		}
 	}
-	if len(branchResults) == 0 {
+	if len(allSuccessful) == 0 {
 		return model.ChatCompletionResponse{}, trace, fmt.Errorf("pipeline failed: no successful branches")
 	}
 
-	sort.Slice(branchResults, func(i, j int) bool {
-		if branchResults[i].EvaluationScore == branchResults[j].EvaluationScore {
-			return branchResults[i].Index < branchResults[j].Index
-		}
-		return branchResults[i].EvaluationScore > branchResults[j].EvaluationScore
-	})
+	if len(branchResults) == 0 {
+		branchResults = append([]BranchResult{}, allSuccessful...)
+		sort.Slice(branchResults, func(i, j int) bool {
+			if branchResults[i].EvaluationScore == branchResults[j].EvaluationScore {
+				return branchResults[i].Index < branchResults[j].Index
+			}
+			return branchResults[i].EvaluationScore > branchResults[j].EvaluationScore
+		})
+	}
 
-	contradictions := detectContradictions(branchResults)
+	synthBranches := append([]BranchResult{}, branchResults...)
+	if e.cfg.PruningEnabled {
+		pruned, stats := e.pruneBranches("tot", synthBranches, e.cfg.PruningMinScore, e.cfg.PruningToTSynthTopK)
+		pruneAggregate = pruneAggregate.merge(stats)
+		if len(pruned) > 0 {
+			synthBranches = pruned
+		} else {
+			fallback := append([]BranchResult{}, allSuccessful...)
+			sort.Slice(fallback, func(i, j int) bool {
+				if fallback[i].EvaluationScore == fallback[j].EvaluationScore {
+					return fallback[i].Index < fallback[j].Index
+				}
+				return fallback[i].EvaluationScore > fallback[j].EvaluationScore
+			})
+			if len(fallback) > e.cfg.PruningToTSynthTopK {
+				fallback = fallback[:e.cfg.PruningToTSynthTopK]
+			}
+			synthBranches = fallback
+		}
+	}
+
+	contradictions := detectContradictions(synthBranches)
 	trace.Contradictions = contradictions
-	trace.Branches = branchResults
+	trace.Branches = synthBranches
+	trace.Pruning = &PruningTrace{
+		Mode:            "tot",
+		Enabled:         e.cfg.PruningEnabled,
+		MinScore:        e.cfg.PruningMinScore,
+		TopK:            e.cfg.PruningToTSynthTopK,
+		CandidatesIn:    pruneAggregate.CandidatesIn,
+		CandidatesOut:   len(synthBranches),
+		DroppedLowScore: pruneAggregate.DroppedLowScore,
+		DroppedTopK:     pruneAggregate.DroppedTopK,
+	}
 
 	synthNode := Node{ID: "synthesis-1", Type: "synthesis", Model: baseModel, StartedAt: time.Now().UTC()}
 	synthReq := req
 	synthReq.Model = baseModel
-	synthReq.Messages = buildSynthesisMessages(req.Messages, branchResults, contradictions)
+	synthReq.Messages = buildSynthesisMessages(req.Messages, synthBranches, contradictions)
 	finalResp, synthErr := up.ChatCompletions(ctx, synthReq)
 	synthNode.EndedAt = time.Now().UTC()
 	if synthErr != nil {
@@ -295,6 +451,108 @@ func (e *Executor) resolveBranches(req model.ChatCompletionRequest) int {
 		branches = e.cfg.MaxBranches
 	}
 	return branches
+}
+
+func (p pruneStats) merge(other pruneStats) pruneStats {
+	return pruneStats{
+		CandidatesIn:    p.CandidatesIn + other.CandidatesIn,
+		CandidatesOut:   other.CandidatesOut,
+		DroppedLowScore: p.DroppedLowScore + other.DroppedLowScore,
+		DroppedTopK:     p.DroppedTopK + other.DroppedTopK,
+	}
+}
+
+func (e *Executor) pruneToTAccumulated(in []BranchResult) ([]BranchResult, pruneStats) {
+	return e.pruneBranches("tot", in, e.cfg.PruningMinScore, e.cfg.PruningToTTopK)
+}
+
+func (e *Executor) pruneMCTSCandidates(in []mctsCandidate, topK int) ([]mctsCandidate, pruneStats) {
+	if !e.cfg.PruningEnabled {
+		out := append([]mctsCandidate{}, in...)
+		return out, pruneStats{CandidatesIn: len(in), CandidatesOut: len(in)}
+	}
+	branches := make([]BranchResult, 0, len(in))
+	for i := range in {
+		branches = append(branches, BranchResult{
+			Index:           i + 1,
+			Output:          in[i].Output,
+			EvaluationScore: in[i].Score,
+		})
+	}
+	pruned, stats := e.pruneBranches("mcts", branches, e.cfg.PruningMinScore, topK)
+	out := make([]mctsCandidate, 0, len(pruned))
+	for _, b := range pruned {
+		idx := b.Index - 1
+		if idx >= 0 && idx < len(in) {
+			out = append(out, in[idx])
+		}
+	}
+	stats.CandidatesOut = len(out)
+	return out, stats
+}
+
+func (e *Executor) pruneMultiAgentCandidates(in []agentResult, topK int) ([]agentResult, pruneStats) {
+	if !e.cfg.PruningEnabled {
+		out := append([]agentResult{}, in...)
+		return out, pruneStats{CandidatesIn: len(in), CandidatesOut: len(in)}
+	}
+	branches := make([]BranchResult, 0, len(in))
+	for i := range in {
+		branches = append(branches, BranchResult{
+			Index:           i + 1,
+			Output:          in[i].Output,
+			EvaluationScore: in[i].Score,
+		})
+	}
+	pruned, stats := e.pruneBranches("multi_agent", branches, e.cfg.PruningMinScore, topK)
+	out := make([]agentResult, 0, len(pruned))
+	for _, b := range pruned {
+		idx := b.Index - 1
+		if idx >= 0 && idx < len(in) {
+			out = append(out, in[idx])
+		}
+	}
+	stats.CandidatesOut = len(out)
+	return out, stats
+}
+
+func pruneStableSort(mode string, in []BranchResult) {
+	sort.Slice(in, func(i, j int) bool {
+		if in[i].EvaluationScore == in[j].EvaluationScore {
+			switch mode {
+			case "mcts", "multi_agent":
+				if len(in[i].Output) == len(in[j].Output) {
+					return in[i].Index < in[j].Index
+				}
+				return len(in[i].Output) > len(in[j].Output)
+			default:
+				return in[i].Index < in[j].Index
+			}
+		}
+		return in[i].EvaluationScore > in[j].EvaluationScore
+	})
+}
+
+func (e *Executor) pruneBranches(mode string, in []BranchResult, minScore float64, topK int) ([]BranchResult, pruneStats) {
+	stats := pruneStats{CandidatesIn: len(in), CandidatesOut: len(in)}
+	if len(in) == 0 {
+		return nil, stats
+	}
+	out := make([]BranchResult, 0, len(in))
+	for _, b := range in {
+		if b.EvaluationScore < minScore {
+			stats.DroppedLowScore++
+			continue
+		}
+		out = append(out, b)
+	}
+	pruneStableSort(mode, out)
+	if topK > 0 && len(out) > topK {
+		stats.DroppedTopK = len(out) - topK
+		out = out[:topK]
+	}
+	stats.CandidatesOut = len(out)
+	return out, stats
 }
 
 func safeMode(req model.ChatCompletionRequest) string {
@@ -422,7 +680,41 @@ func extractAssistantText(resp model.ChatCompletionResponse) string {
 	return strings.TrimSpace(resp.Choices[0].Message.Content)
 }
 
-func (e *Executor) selfEvaluate(output string, st state.CognitiveState) (float64, string) {
+func (e *Executor) evaluateOutput(req model.ChatCompletionRequest, output string, st state.CognitiveState, applyStatePenalty bool) (float64, string) {
+	if req.Reasoning != nil && !req.Reasoning.SelfEvaluate {
+		return 0.5, "self_evaluate_disabled"
+	}
+
+	score, reason := e.legacySelfEvaluate(output, st)
+	if e.cfg.SelfEvalCurveEnabled {
+		score = e.applySelfEvalCurve(score)
+		reason = "heuristic_quality_curve"
+	}
+	if applyStatePenalty {
+		score = applyMCTSStatePenalty(score, st)
+	}
+	return score, reason
+}
+
+func (e *Executor) applySelfEvalCurve(score float64) float64 {
+	switch {
+	case score <= e.cfg.SelfEvalCurveLowMax:
+		score = (score * e.cfg.SelfEvalCurveLowWeight) + e.cfg.SelfEvalCurveBias
+	case score <= e.cfg.SelfEvalCurveMidMax:
+		score = (score * e.cfg.SelfEvalCurveMidWeight) + e.cfg.SelfEvalCurveBias
+	default:
+		score = (score * e.cfg.SelfEvalCurveHighWeight) + e.cfg.SelfEvalCurveBias
+	}
+	if score > 1 {
+		score = 1
+	}
+	if score < 0 {
+		score = 0
+	}
+	return math.Round(score*1000) / 1000
+}
+
+func (e *Executor) legacySelfEvaluate(output string, st state.CognitiveState) (float64, string) {
 	if strings.TrimSpace(output) == "" {
 		return 0.2, "empty_output"
 	}

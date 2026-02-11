@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.1.3] - 2026-02-11
+## [0.1.4] - 2026-02-11
 
 ### Added
 - OpenAI-compatible tool-calling loop in runtime gateway, including support for assistant `tool_calls` and `tool` role messages.
@@ -26,11 +26,54 @@ All notable changes to this project are documented in this file.
   - `GLM_TOOL_SERVER_CLIENT_ID`
   - `GLM_TOOL_CALLING_MAX_ITERATIONS`
   - `GLM_TOOL_CALLING_TIMEOUT_SECONDS`
+- New optional self-evaluation weighting curve configuration surface:
+  - `GLM_SELF_EVAL_CURVE_ENABLED`
+  - `GLM_SELF_EVAL_CURVE_LOW_MAX`
+  - `GLM_SELF_EVAL_CURVE_MID_MAX`
+  - `GLM_SELF_EVAL_CURVE_LOW_WEIGHT`
+  - `GLM_SELF_EVAL_CURVE_MID_WEIGHT`
+  - `GLM_SELF_EVAL_CURVE_HIGH_WEIGHT`
+  - `GLM_SELF_EVAL_CURVE_BIAS`
+- New reasoning pruning telemetry headers:
+  - `X-GLM-Reasoning-Pruning`
+  - `X-GLM-Reasoning-Prune-In`
+  - `X-GLM-Reasoning-Prune-Out`
+  - `X-GLM-Reasoning-Prune-Dropped`
+- New reasoning graph pruning configuration surface:
+  - `GLM_REASONING_PRUNING_ENABLED`
+  - `GLM_REASONING_PRUNING_MIN_SCORE`
+  - `GLM_REASONING_PRUNING_TOT_TOPK`
+  - `GLM_REASONING_PRUNING_TOT_SYNTH_TOPK`
+  - `GLM_REASONING_PRUNING_MCTS_POOL_TOPK`
+  - `GLM_REASONING_PRUNING_MCTS_SYNTH_TOPK`
+  - `GLM_REASONING_PRUNING_MA_ROUND_TOPK`
+  - `GLM_REASONING_PRUNING_MA_SYNTH_TOPK`
+- New MCTS v2 telemetry headers:
+  - `X-GLM-MCTS-V2`
+  - `X-GLM-MCTS-Early-Stop`
+  - `X-GLM-MCTS-Rollouts-Executed`
+- New optional MCTS v2 configuration surface:
+  - `GLM_MCTS_V2_ENABLED`
+  - `GLM_MCTS_EARLY_STOP_WINDOW`
+  - `GLM_MCTS_EARLY_STOP_DELTA`
+- New meta reflection v2 telemetry headers (meta-enabled flows only):
+  - `X-GLM-Meta-Reflection`
+  - `X-GLM-Meta-Reflection-Passes`
+  - `X-GLM-Meta-Reflection-Reason`
+- New optional meta reflection v2 configuration surface:
+  - `GLM_META_REFLECTION_ENABLED`
+  - `GLM_META_REFLECTION_MAX_PASSES`
+  - `GLM_META_REFLECTION_TRIGGER_DECISIONS`
 
 ### Changed
 - Reasoning pipelines (`tot`, `mcts`, `multi_agent`) now support tool-calling via a tool-aware upstream wrapper.
 - Unified cognition normalization now propagates `tools` and `tool_choice`.
 - `GLM_TOOL_CALLING_TIMEOUT_SECONDS` default updated to `60` (hard timeout ceiling for tool dispatch).
+- `reasoning.self_evaluate=false` is now enforced for ToT/MCTS/multi-agent scoring paths, returning neutral evaluation score (`0.5`) with no state-penalty application.
+- Self-evaluation weighting curves are backward-compatible and disabled by default, preserving legacy scoring behavior unless explicitly enabled.
+- Deterministic graph-pruning heuristics now apply to reasoning modes (`tot`, `mcts`, `multi_agent`) during accumulation and pre-synthesis, with fail-open baseline behavior when pruning removes all candidates.
+- MCTS v2 quality mode adds UCB-tuned selection, task-aware action priors/prompts, and convergence-based early stop while preserving legacy behavior by default.
+- Meta reflection v2 adds a bounded single-pass revise-and-reevaluate loop when meta decisions match configured trigger decisions (`caution,reject` by default), with strict opt-in defaults and fail-open retention of the original response on reflection errors.
 
 ### Fixed
 - Cross-package response schema/test compatibility after expanding assistant message shape with `name` and `tool_calls`.

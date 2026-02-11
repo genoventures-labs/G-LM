@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mike/cognitive-llm/internal/auth"
 	"github.com/mike/cognitive-llm/internal/config"
+	"github.com/mike/cognitive-llm/internal/metareasoning"
 	"github.com/mike/cognitive-llm/internal/model"
 	"github.com/mike/cognitive-llm/internal/store/memory"
 )
@@ -20,9 +22,12 @@ import (
 type fakeUpstream struct {
 	models         []string
 	listCalls      int
+	chatCalls      int
 	lastModelUsed  string
 	lastRequest    model.ChatCompletionRequest
 	responseText   string
+	responseSeq    []string
+	errorOnCall    map[int]error
 	enableToolLoop bool
 	failMCTS       bool
 	failMultiAgent bool
@@ -76,6 +81,12 @@ func (f *fakeUpstream) ListModels(ctx context.Context) (model.ModelListResponse,
 }
 
 func (f *fakeUpstream) ChatCompletions(ctx context.Context, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
+	f.chatCalls++
+	if f.errorOnCall != nil {
+		if err := f.errorOnCall[f.chatCalls]; err != nil {
+			return model.ChatCompletionResponse{}, err
+		}
+	}
 	if f.failDirect && (req.Reasoning == nil || req.Reasoning.Mode == "") {
 		return model.ChatCompletionResponse{}, fmt.Errorf("direct failure")
 	}
@@ -142,6 +153,9 @@ func (f *fakeUpstream) ChatCompletions(ctx context.Context, req model.ChatComple
 	}
 	resp := model.ChatCompletionResponse{Model: req.Model}
 	content := "<thought>secret</thought><answer>safe</answer>"
+	if len(f.responseSeq) >= f.chatCalls && strings.TrimSpace(f.responseSeq[f.chatCalls-1]) != "" {
+		content = f.responseSeq[f.chatCalls-1]
+	}
 	if f.responseText != "" {
 		content = f.responseText
 	}
@@ -761,6 +775,18 @@ func TestReasoningPipelineHeaders(t *testing.T) {
 	if rr.Header().Get("X-GLM-Reasoning-Branches") == "" {
 		t.Fatal("expected branch count header")
 	}
+	if rr.Header().Get("X-GLM-Reasoning-Pruning") == "" {
+		t.Fatal("expected reasoning pruning header")
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Prune-In") == "" {
+		t.Fatal("expected reasoning prune-in header")
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Prune-Out") == "" {
+		t.Fatal("expected reasoning prune-out header")
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Prune-Dropped") == "" {
+		t.Fatal("expected reasoning prune-dropped header")
+	}
 }
 
 func TestMCTSReasoningHeaders(t *testing.T) {
@@ -793,6 +819,18 @@ func TestMCTSReasoningHeaders(t *testing.T) {
 	}
 	if rr.Header().Get("X-GLM-MCTS-Best-Score") == "" {
 		t.Fatal("expected mcts best score header")
+	}
+	if rr.Header().Get("X-GLM-MCTS-V2") == "" {
+		t.Fatal("expected mcts v2 header")
+	}
+	if rr.Header().Get("X-GLM-MCTS-Early-Stop") == "" {
+		t.Fatal("expected mcts early-stop header")
+	}
+	if rr.Header().Get("X-GLM-MCTS-Rollouts-Executed") == "" {
+		t.Fatal("expected mcts rollouts-executed header")
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pruning") == "" {
+		t.Fatal("expected reasoning pruning header")
 	}
 }
 
@@ -830,6 +868,9 @@ func TestMultiAgentReasoningHeaders(t *testing.T) {
 	}
 	if rr.Header().Get("X-GLM-MA-Consensus") == "" {
 		t.Fatal("expected X-GLM-MA-Consensus header")
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pruning") == "" {
+		t.Fatal("expected reasoning pruning header")
 	}
 }
 
@@ -1184,8 +1225,33 @@ func TestCognitionRouteInputTaskReasoning(t *testing.T) {
 	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "tot" {
 		t.Fatalf("expected reasoning pipeline header, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
 	}
+	if rr.Header().Get("X-GLM-Reasoning-Pruning") == "" {
+		t.Fatal("expected reasoning pruning header")
+	}
 	if up.lastRequest.Reasoning == nil {
 		t.Fatal("expected reasoning options to be set on upstream request")
+	}
+}
+
+func TestDirectChatOmitsReasoningPruningHeaders(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model":    "mistral:7b",
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pruning") != "" {
+		t.Fatalf("did not expect pruning header on direct chat, got %q", rr.Header().Get("X-GLM-Reasoning-Pruning"))
+	}
+	if rr.Header().Get("X-GLM-MCTS-V2") != "" {
+		t.Fatalf("did not expect mcts v2 header on direct chat, got %q", rr.Header().Get("X-GLM-MCTS-V2"))
 	}
 }
 
@@ -1287,6 +1353,12 @@ func TestMetaReasoningOptInHeaders(t *testing.T) {
 	if rr.Header().Get("X-GLM-Meta-Confidence") == "" || rr.Header().Get("X-GLM-Meta-Risk-Score") == "" {
 		t.Fatal("expected meta confidence and risk headers")
 	}
+	if rr.Header().Get("X-GLM-Meta-Reflection") != "disabled" {
+		t.Fatalf("expected reflection disabled by default, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection-Passes") != "0" {
+		t.Fatalf("expected 0 reflection passes by default, got %q", rr.Header().Get("X-GLM-Meta-Reflection-Passes"))
+	}
 }
 
 func TestMetaReasoningDisabledNoHeaders(t *testing.T) {
@@ -1348,6 +1420,152 @@ func TestMetaReasoningAuditOutcomeTags(t *testing.T) {
 	got := out.Items[0].Outcome
 	if !bytes.Contains([]byte(got), []byte("meta_decision=")) || !bytes.Contains([]byte(got), []byte("meta_conf=")) || !bytes.Contains([]byte(got), []byte("meta_risk=")) {
 		t.Fatalf("expected meta tags in audit outcome, got %q", got)
+	}
+}
+
+func TestShouldTriggerReflectionStrictOptIn(t *testing.T) {
+	req := model.ChatCompletionRequest{
+		Reasoning: &model.ReasoningOptions{
+			MetaEnabled: true,
+		},
+	}
+	meta := metareasoning.Result{Decision: "caution"}
+	cfg := config.Config{
+		MetaReflectionEnabled:          false,
+		MetaReflectionTriggerDecisions: []string{"caution", "reject"},
+	}
+	if shouldTriggerReflection(meta, req, cfg) {
+		t.Fatal("expected no trigger when reflection is not enabled")
+	}
+	req.Reasoning.MetaReflectionEnabled = true
+	if !shouldTriggerReflection(meta, req, cfg) {
+		t.Fatal("expected trigger when request enables reflection and decision matches")
+	}
+	meta.Decision = "accept"
+	if shouldTriggerReflection(meta, req, cfg) {
+		t.Fatal("expected no trigger for non-matching decision")
+	}
+}
+
+func TestMetaReflectionAppliedWhenImproved(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{"maybe unclear perhaps", "Concrete answer with clear assumptions, checks, and risks handled explicitly."},
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.MetaReasoningEnabled = true
+		cfg.MetaReflectionEnabled = true
+		cfg.MetaReflectionMaxPasses = 1
+		cfg.MetaReflectionTriggerDecisions = []string{"caution", "reject"}
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"meta_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if up.chatCalls < 2 {
+		t.Fatalf("expected reflection revision call, got %d upstream calls", up.chatCalls)
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection") != "applied" {
+		t.Fatalf("expected reflection applied, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection-Passes") != "1" {
+		t.Fatalf("expected one reflection pass, got %q", rr.Header().Get("X-GLM-Meta-Reflection-Passes"))
+	}
+}
+
+func TestMetaReflectionSkippedWhenNotImproved(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{"maybe unclear perhaps", "maybe unclear perhaps"},
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.MetaReasoningEnabled = true
+		cfg.MetaReflectionEnabled = true
+		cfg.MetaReflectionMaxPasses = 1
+		cfg.MetaReflectionTriggerDecisions = []string{"caution", "reject"}
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"meta_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection") != "skipped" {
+		t.Fatalf("expected reflection skipped, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection-Reason") != "decision_trigger" {
+		t.Fatalf("expected decision trigger reason, got %q", rr.Header().Get("X-GLM-Meta-Reflection-Reason"))
+	}
+	var out model.ChatCompletionResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(out.Choices[0].Message.Content)
+	if got != "maybe unclear perhaps" {
+		t.Fatalf("expected original response retained, got %q", got)
+	}
+}
+
+func TestMetaReflectionUpstreamErrorReturnsOriginal(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{"maybe unclear perhaps"},
+		errorOnCall: map[int]error{2: fmt.Errorf("revision upstream failure")},
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.MetaReasoningEnabled = true
+		cfg.MetaReflectionEnabled = true
+		cfg.MetaReflectionMaxPasses = 1
+		cfg.MetaReflectionTriggerDecisions = []string{"caution", "reject"}
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"meta_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection") != "error" {
+		t.Fatalf("expected reflection error header, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection-Reason") != "upstream_error" {
+		t.Fatalf("expected upstream_error reason, got %q", rr.Header().Get("X-GLM-Meta-Reflection-Reason"))
+	}
+	var out model.ChatCompletionResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(out.Choices[0].Message.Content)
+	if got != "maybe unclear perhaps" {
+		t.Fatalf("expected original response retained after reflection error, got %q", got)
 	}
 }
 

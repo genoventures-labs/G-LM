@@ -60,24 +60,33 @@ func (e *Executor) executeMCTS(
 	rolloutBudget := e.resolveMCTSRollouts(req)
 	maxDepth := e.resolveMCTSDepth(req)
 	exploration := e.resolveMCTSExploration(req)
+	v2Enabled := e.resolveMCTSV2Enabled(req)
+	earlyStopWindow := e.resolveMCTSEarlyStopWindow(req)
+	earlyStopDelta := e.resolveMCTSEarlyStopDelta(req)
 	root := &mctsNode{ID: "mcts-root", Path: nil, Depth: 0, Prior: 1}
 	nodes := []Node{}
 	candidates := []mctsCandidate{}
+	var pruneAggregate pruneStats
+	successfulRollouts := 0
 	maxVisitedDepth := 0
+	var earlyStop bool
+	var earlyStopReason string
+	bestHistory := make([]float64, 0, earlyStopWindow+1)
+	bestSoFar := math.Inf(-1)
 
 	for i := 0; i < rolloutBudget; i++ {
 		if err := ctx.Err(); err != nil {
 			break
 		}
-		leaf, chain := selectMCTSLeaf(root, exploration)
+		leaf, chain := selectMCTSLeaf(root, exploration, v2Enabled)
 		if leaf.Depth >= maxDepth {
 			leaf.Terminal = true
 			continue
 		}
 		if len(leaf.Children) == 0 {
-			expandMCTSLeaf(leaf, e.mctsActionsForTask(st.TaskMode))
+			expandMCTSLeaf(leaf, e.mctsActionPriorsForTask(st.TaskMode))
 		}
-		next, selected := selectMCTSChild(leaf, exploration)
+		next, selected := selectMCTSChild(leaf, exploration, v2Enabled)
 		if next == nil {
 			continue
 		}
@@ -98,7 +107,7 @@ func (e *Executor) executeMCTS(
 
 		simReq := req
 		simReq.Model = baseModel
-		simReq.Messages = buildMCTSMessages(req.Messages, next.Path)
+		simReq.Messages = buildMCTSMessages(req.Messages, next.Path, st.TaskMode)
 		resp, simErr := up.ChatCompletions(ctx, simReq)
 		simNode.EndedAt = time.Now().UTC()
 		if simErr != nil {
@@ -108,8 +117,7 @@ func (e *Executor) executeMCTS(
 		}
 
 		output := extractAssistantText(resp)
-		score, _ := e.selfEvaluate(output, st)
-		score = applyMCTSStatePenalty(score, st)
+		score, _ := e.evaluateOutput(req, output, st, true)
 		next.Output = output
 		next.Terminal = next.Depth >= maxDepth
 		simNode.Score = score
@@ -119,7 +127,30 @@ func (e *Executor) executeMCTS(
 			Output: output,
 			Score:  score,
 		})
+		successfulRollouts++
+		if score > bestSoFar {
+			bestSoFar = score
+		}
+		bestHistory = append(bestHistory, bestSoFar)
+		if shouldEarlyStop(bestHistory, earlyStopWindow, earlyStopDelta) {
+			earlyStop = true
+			earlyStopReason = "converged_delta"
+			if pruneAggregate.CandidatesIn == 0 {
+				earlyStopReason = "converged_delta_no_prune"
+			}
+			if e.cfg.PruningEnabled {
+				// Keep existing prune behavior before stop.
+			}
+		}
+		if e.cfg.PruningEnabled {
+			pruned, stats := e.pruneMCTSCandidates(candidates, e.cfg.PruningMCTSPoolTopK)
+			candidates = pruned
+			pruneAggregate = pruneAggregate.merge(stats)
+		}
 		backpropagateMCTS(chain, score)
+		if earlyStop {
+			break
+		}
 	}
 
 	if len(candidates) == 0 {
@@ -130,6 +161,7 @@ func (e *Executor) executeMCTS(
 			return model.ChatCompletionResponse{}, trace, fmt.Errorf("mcts failed: no successful rollouts")
 		}
 		candidates = append(candidates, baseline)
+		successfulRollouts = 1
 		maxVisitedDepth = maxInt(1, maxVisitedDepth)
 	}
 
@@ -140,14 +172,41 @@ func (e *Executor) executeMCTS(
 		return candidates[i].Score > candidates[j].Score
 	})
 
-	best := candidates[0]
-	branchResults := make([]BranchResult, 0, minInt(3, len(candidates)))
-	for i := 0; i < len(candidates) && i < 3; i++ {
+	synthCandidates := append([]mctsCandidate{}, candidates...)
+	if e.cfg.PruningEnabled {
+		pruned, stats := e.pruneMCTSCandidates(synthCandidates, e.cfg.PruningMCTSSynthTopK)
+		pruneAggregate = pruneAggregate.merge(stats)
+		if len(pruned) == 0 {
+			baseline, baselineNode, baselineErr := e.mctsBaselineCandidate(ctx, up, req, baseModel, st)
+			nodes = append(nodes, baselineNode)
+			if baselineErr != nil {
+				trace.Nodes = nodes
+				return model.ChatCompletionResponse{}, trace, fmt.Errorf("mcts failed: no pruned candidates and baseline fallback failed")
+			}
+			synthCandidates = []mctsCandidate{baseline}
+			candidates = append(candidates, baseline)
+			if successfulRollouts == 0 {
+				successfulRollouts = 1
+			}
+		} else {
+			synthCandidates = pruned
+		}
+	}
+
+	sort.Slice(synthCandidates, func(i, j int) bool {
+		if synthCandidates[i].Score == synthCandidates[j].Score {
+			return len(synthCandidates[i].Output) > len(synthCandidates[j].Output)
+		}
+		return synthCandidates[i].Score > synthCandidates[j].Score
+	})
+	best := synthCandidates[0]
+	branchResults := make([]BranchResult, 0, minInt(3, len(synthCandidates)))
+	for i := 0; i < len(synthCandidates) && i < 3; i++ {
 		branchResults = append(branchResults, BranchResult{
 			Index:            i + 1,
 			Model:            baseModel,
-			Output:           candidates[i].Output,
-			EvaluationScore:  candidates[i].Score,
+			Output:           synthCandidates[i].Output,
+			EvaluationScore:  synthCandidates[i].Score,
 			EvaluationReason: "mcts_simulation",
 		})
 	}
@@ -160,9 +219,12 @@ func (e *Executor) executeMCTS(
 	if synthErr != nil {
 		trace.Nodes = nodes
 		trace.MCTS = &MCTSResult{
-			Rollouts:  len(candidates),
-			Depth:     maxVisitedDepth,
-			BestScore: best.Score,
+			Rollouts:         rolloutBudget,
+			RolloutsExecuted: maxInt(1, successfulRollouts),
+			Depth:            maxVisitedDepth,
+			BestScore:        best.Score,
+			EarlyStop:        earlyStop,
+			EarlyStopReason:  earlyStopReason,
 		}
 		return model.ChatCompletionResponse{}, trace, fmt.Errorf("mcts synthesis failed: %w", synthErr)
 	}
@@ -170,10 +232,23 @@ func (e *Executor) executeMCTS(
 	trace.Contradictions = contradictions
 	trace.Branches = branchResults
 	trace.Nodes = nodes
+	trace.Pruning = &PruningTrace{
+		Mode:            "mcts",
+		Enabled:         e.cfg.PruningEnabled,
+		MinScore:        e.cfg.PruningMinScore,
+		TopK:            e.cfg.PruningMCTSSynthTopK,
+		CandidatesIn:    pruneAggregate.CandidatesIn,
+		CandidatesOut:   len(synthCandidates),
+		DroppedLowScore: pruneAggregate.DroppedLowScore,
+		DroppedTopK:     pruneAggregate.DroppedTopK,
+	}
 	trace.MCTS = &MCTSResult{
-		Rollouts:  len(candidates),
-		Depth:     maxVisitedDepth,
-		BestScore: best.Score,
+		Rollouts:         rolloutBudget,
+		RolloutsExecuted: maxInt(1, successfulRollouts),
+		Depth:            maxVisitedDepth,
+		BestScore:        best.Score,
+		EarlyStop:        earlyStop,
+		EarlyStopReason:  earlyStopReason,
 	}
 	if len(candidates) == 1 && len(candidates[0].Path) == 0 {
 		trace.MCTS.Fallback = "direct_baseline"
@@ -181,11 +256,11 @@ func (e *Executor) executeMCTS(
 	return finalResp, trace, nil
 }
 
-func selectMCTSLeaf(root *mctsNode, exploration float64) (*mctsNode, []*mctsNode) {
+func selectMCTSLeaf(root *mctsNode, exploration float64, v2 bool) (*mctsNode, []*mctsNode) {
 	cur := root
 	chain := []*mctsNode{root}
 	for len(cur.Children) > 0 {
-		next, _ := selectMCTSChild(cur, exploration)
+		next, _ := selectMCTSChild(cur, exploration, v2)
 		if next == nil {
 			break
 		}
@@ -198,7 +273,7 @@ func selectMCTSLeaf(root *mctsNode, exploration float64) (*mctsNode, []*mctsNode
 	return cur, chain
 }
 
-func selectMCTSChild(node *mctsNode, exploration float64) (*mctsNode, int) {
+func selectMCTSChild(node *mctsNode, exploration float64, v2 bool) (*mctsNode, int) {
 	if len(node.Children) == 0 {
 		return nil, node.Depth
 	}
@@ -206,7 +281,12 @@ func selectMCTSChild(node *mctsNode, exploration float64) (*mctsNode, int) {
 	bestScore := math.Inf(-1)
 	parentVisits := float64(maxInt(1, node.Visits))
 	for _, child := range node.Children {
-		score := mctsUCT(child, parentVisits, exploration)
+		score := 0.0
+		if v2 {
+			score = mctsUCBTuned(child, parentVisits, exploration)
+		} else {
+			score = mctsUCT(child, parentVisits, exploration)
+		}
 		if score > bestScore {
 			bestScore = score
 			best = child
@@ -218,13 +298,25 @@ func selectMCTSChild(node *mctsNode, exploration float64) (*mctsNode, int) {
 	return best, best.Depth
 }
 
-func expandMCTSLeaf(node *mctsNode, actions []string) {
+type mctsActionPrior struct {
+	Action string
+	Prior  float64
+}
+
+func expandMCTSLeaf(node *mctsNode, actions []mctsActionPrior) {
+	totalPrior := 0.0
+	for _, a := range actions {
+		totalPrior += a.Prior
+	}
+	if totalPrior <= 0 {
+		totalPrior = float64(len(actions))
+	}
 	for i, action := range actions {
-		path := append(clonePath(node.Path), action)
+		path := append(clonePath(node.Path), action.Action)
 		node.Children = append(node.Children, &mctsNode{
 			ID:     fmt.Sprintf("%s-%d", node.ID, i+1),
 			Path:   path,
-			Prior:  1.0 / float64(len(actions)),
+			Prior:  action.Prior / totalPrior,
 			Depth:  node.Depth + 1,
 			Parent: node,
 		})
@@ -248,10 +340,33 @@ func mctsUCT(node *mctsNode, parentVisits float64, exploration float64) float64 
 	return q + u + 0.01*node.Prior
 }
 
-func buildMCTSMessages(base []model.Message, path []string) []model.Message {
+func mctsUCBTuned(node *mctsNode, parentVisits float64, exploration float64) float64 {
+	if node.Visits == 0 {
+		return math.Inf(1)
+	}
+	mean := node.Value / float64(node.Visits)
+	variance := mean * (1.0 - mean)
+	bound := variance + math.Sqrt((2*math.Log(parentVisits))/float64(node.Visits))
+	if bound > 0.25 {
+		bound = 0.25
+	}
+	u := exploration * math.Sqrt((math.Log(parentVisits)/float64(node.Visits))*bound)
+	return mean + u + 0.02*node.Prior
+}
+
+func buildMCTSMessages(base []model.Message, path []string, taskMode string) []model.Message {
+	instruction := "Produce a concise, verifiable answer. Include assumptions and controls."
+	switch strings.ToLower(strings.TrimSpace(taskMode)) {
+	case "coding":
+		instruction = "Produce a concise, testable solution. Include assumptions, validation checks, and explicit test strategy."
+	case "extraction":
+		instruction = "Produce an evidence-grounded extraction. Include assumptions, source grounding, and uncertainty markers."
+	default:
+		instruction = "Produce a concise, verifiable answer. Include assumptions, controls, and residual uncertainty."
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"path":        path,
-		"instruction": "Produce a concise, verifiable answer. Include assumptions and controls.",
+		"instruction": instruction,
 	})
 	sys := model.Message{
 		Role:    "system",
@@ -288,6 +403,29 @@ func (e *Executor) mctsActionsForTask(task string) []string {
 		return []string{"evidence_first", "plan_first", "risk_first"}
 	default:
 		return []string{"plan_first", "risk_first", "evidence_first"}
+	}
+}
+
+func (e *Executor) mctsActionPriorsForTask(task string) []mctsActionPrior {
+	switch strings.ToLower(strings.TrimSpace(task)) {
+	case "coding":
+		return []mctsActionPrior{
+			{Action: "evidence_first", Prior: 0.50},
+			{Action: "plan_first", Prior: 0.32},
+			{Action: "risk_first", Prior: 0.18},
+		}
+	case "extraction":
+		return []mctsActionPrior{
+			{Action: "evidence_first", Prior: 0.46},
+			{Action: "plan_first", Prior: 0.30},
+			{Action: "risk_first", Prior: 0.24},
+		}
+	default:
+		return []mctsActionPrior{
+			{Action: "plan_first", Prior: 0.40},
+			{Action: "risk_first", Prior: 0.34},
+			{Action: "evidence_first", Prior: 0.26},
+		}
 	}
 }
 
@@ -333,6 +471,51 @@ func (e *Executor) resolveMCTSExploration(req model.ChatCompletionRequest) float
 	return exploration
 }
 
+func (e *Executor) resolveMCTSV2Enabled(req model.ChatCompletionRequest) bool {
+	if req.Reasoning != nil && req.Reasoning.MCTSV2Enabled {
+		return true
+	}
+	return e.cfg.MCTSV2Enabled
+}
+
+func (e *Executor) resolveMCTSEarlyStopWindow(req model.ChatCompletionRequest) int {
+	window := e.cfg.MCTSEarlyStopWindow
+	if req.Reasoning != nil && req.Reasoning.MCTSEarlyStopWindow > 0 {
+		window = req.Reasoning.MCTSEarlyStopWindow
+	}
+	if window < 2 {
+		return 2
+	}
+	return window
+}
+
+func (e *Executor) resolveMCTSEarlyStopDelta(req model.ChatCompletionRequest) float64 {
+	delta := e.cfg.MCTSEarlyStopDelta
+	if req.Reasoning != nil && req.Reasoning.MCTSEarlyStopDelta > 0 {
+		delta = req.Reasoning.MCTSEarlyStopDelta
+	}
+	if delta < 0 {
+		return 0
+	}
+	if delta > 0.2 {
+		return 0.2
+	}
+	return delta
+}
+
+func shouldEarlyStop(bestHistory []float64, window int, delta float64) bool {
+	if len(bestHistory) < window {
+		return false
+	}
+	end := len(bestHistory) - 1
+	start := end - window + 1
+	if start < 0 {
+		return false
+	}
+	improvement := bestHistory[end] - bestHistory[start]
+	return improvement < delta
+}
+
 func clonePath(in []string) []string {
 	if len(in) == 0 {
 		return nil
@@ -372,8 +555,7 @@ func (e *Executor) mctsBaselineCandidate(
 		return mctsCandidate{}, node, err
 	}
 	output := extractAssistantText(resp)
-	score, _ := e.selfEvaluate(output, st)
-	score = applyMCTSStatePenalty(score, st)
+	score, _ := e.evaluateOutput(req, output, st, true)
 	node.Score = score
 	return mctsCandidate{
 		Path:   nil,
