@@ -188,6 +188,17 @@ Release note standard:
 - Use `/Users/mike/Desktop/testModel/docs/release_notes_template.md` as the baseline structure.
 - Include the full compare link as a supporting link, not the only content.
 
+Release helper command:
+
+- `./scripts/release_notes.sh v0.1.5`:
+  - auto-detects previous tag,
+  - builds quick-read notes from the matching `CHANGELOG.md` section,
+  - creates/edits the GitHub release notes in one command.
+- Optional flags:
+  - `--prev v0.1.4`
+  - `--mode auto|create|edit`
+  - `--dry-run`
+
 ## Repository Structure
 
 - `/cmd/glm-api`: service entrypoint and operational CLI commands
