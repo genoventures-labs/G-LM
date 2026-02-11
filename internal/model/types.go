@@ -36,16 +36,21 @@ type CognitionRequest struct {
 }
 
 type ReasoningOptions struct {
-	Mode                 string  `json:"mode,omitempty"`
-	Branches             int     `json:"branches,omitempty"`
-	SelfEvaluate         bool    `json:"self_evaluate,omitempty"`
-	DetectContradictions bool    `json:"detect_contradictions,omitempty"`
-	MCTSMaxRollouts      int     `json:"mcts_max_rollouts,omitempty"`
-	MCTSMaxDepth         int     `json:"mcts_max_depth,omitempty"`
-	MCTSExploration      float64 `json:"mcts_exploration,omitempty"`
-	MCTSTimeoutMs        int     `json:"mcts_timeout_ms,omitempty"`
-	MetaEnabled          bool    `json:"meta_enabled,omitempty"`
-	MetaProfile          string  `json:"meta_profile,omitempty"`
+	Mode                   string  `json:"mode,omitempty"`
+	Branches               int     `json:"branches,omitempty"`
+	SelfEvaluate           bool    `json:"self_evaluate,omitempty"`
+	DetectContradictions   bool    `json:"detect_contradictions,omitempty"`
+	MCTSMaxRollouts        int     `json:"mcts_max_rollouts,omitempty"`
+	MCTSMaxDepth           int     `json:"mcts_max_depth,omitempty"`
+	MCTSExploration        float64 `json:"mcts_exploration,omitempty"`
+	MCTSTimeoutMs          int     `json:"mcts_timeout_ms,omitempty"`
+	MultiAgentEnabled      bool    `json:"multi_agent_enabled,omitempty"`
+	MultiAgentMaxAgents    int     `json:"multi_agent_max_agents,omitempty"`
+	MultiAgentMaxRounds    int     `json:"multi_agent_max_rounds,omitempty"`
+	MultiAgentTimeoutMs    int     `json:"multi_agent_timeout_ms,omitempty"`
+	MultiAgentBudgetTokens int     `json:"multi_agent_budget_tokens,omitempty"`
+	MetaEnabled            bool    `json:"meta_enabled,omitempty"`
+	MetaProfile            string  `json:"meta_profile,omitempty"`
 }
 
 type DocumentInput struct {

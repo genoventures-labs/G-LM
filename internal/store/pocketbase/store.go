@@ -552,12 +552,34 @@ func (s *Store) UpsertMemoryNode(ctx context.Context, node model.MemoryNode) (mo
 	if strings.TrimSpace(node.SessionID) != "" {
 		meta["session_id"] = node.SessionID
 	}
+	label := strings.TrimSpace(node.Label)
+	if label == "" {
+		label = strings.TrimSpace(node.Key)
+	}
+	if label == "" {
+		if v, ok := meta["label"].(string); ok {
+			label = strings.TrimSpace(v)
+		}
+	}
+	content := ""
+	if v, ok := meta["content"].(string); ok {
+		content = strings.TrimSpace(v)
+	}
+	if content == "" {
+		content = label
+	}
+	if content == "" {
+		content = strings.TrimSpace(node.Key)
+	}
+	if content == "" {
+		content = "memory-node"
+	}
 	payload := map[string]any{
 		"tenant_id":    node.TenantID,
 		"session_id":   node.SessionID,
 		"key":          node.Key,
-		"label":        node.Label,
-		"content":      node.Label,
+		"label":        label,
+		"content":      content,
 		"metadata":     meta,
 		"weight":       node.Weight,
 		"importance":   node.Importance,

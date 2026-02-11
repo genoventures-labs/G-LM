@@ -41,6 +41,12 @@ type Config struct {
 	MCTSDefaultExploration           float64
 	MCTSStageTimeout                 time.Duration
 	MCTSFailOpen                     bool
+	MultiAgentEnabled                bool
+	MultiAgentMaxAgents              int
+	MultiAgentMaxRounds              int
+	MultiAgentStageTimeout           time.Duration
+	MultiAgentBudgetTokens           int
+	MultiAgentFailOpen               bool
 	IntentPreprocessorEnabled        bool
 	IntentAmbiguityThreshold         float64
 	DocumentOrchestrationEnabled     bool
@@ -105,6 +111,12 @@ func Load() Config {
 		MCTSDefaultExploration:           envFloat("GLM_MCTS_DEFAULT_EXPLORATION", 1.20),
 		MCTSStageTimeout:                 time.Duration(envInt("GLM_MCTS_STAGE_TIMEOUT_SECONDS", 35)) * time.Second,
 		MCTSFailOpen:                     envBool("GLM_MCTS_FAILOPEN", true),
+		MultiAgentEnabled:                envBool("GLM_MULTI_AGENT_ENABLED", true),
+		MultiAgentMaxAgents:              envInt("GLM_MULTI_AGENT_MAX_AGENTS", 4),
+		MultiAgentMaxRounds:              envInt("GLM_MULTI_AGENT_MAX_ROUNDS", 2),
+		MultiAgentStageTimeout:           time.Duration(envInt("GLM_MULTI_AGENT_STAGE_TIMEOUT_SECONDS", 45)) * time.Second,
+		MultiAgentBudgetTokens:           envInt("GLM_MULTI_AGENT_BUDGET_TOKENS", 700),
+		MultiAgentFailOpen:               envBool("GLM_MULTI_AGENT_FAILOPEN", true),
 		IntentPreprocessorEnabled:        envBool("GLM_INTENT_PREPROCESSOR_ENABLED", true),
 		IntentAmbiguityThreshold:         envFloat("GLM_INTENT_AMBIGUITY_THRESHOLD", 0.62),
 		DocumentOrchestrationEnabled:     envBool("GLM_DOCUMENT_ORCHESTRATION_ENABLED", true),

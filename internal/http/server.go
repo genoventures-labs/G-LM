@@ -72,6 +72,9 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream) *Server {
 	if cfg.MCTSStageTimeout <= 0 {
 		cfg.MCTSStageTimeout = 35 * time.Second
 	}
+	if cfg.MultiAgentStageTimeout <= 0 {
+		cfg.MultiAgentStageTimeout = 45 * time.Second
+	}
 	router := orchestrator.NewRouter(
 		cfg.OrchestratorDefaultModel,
 		cfg.OrchestratorAliases,
@@ -96,6 +99,10 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream) *Server {
 			MCTSDefaultDepth:       cfg.MCTSDefaultDepth,
 			MCTSMaxDepth:           cfg.MCTSMaxDepth,
 			MCTSDefaultExploration: cfg.MCTSDefaultExploration,
+			MultiAgentEnabled:      cfg.MultiAgentEnabled,
+			MultiAgentMaxAgents:    cfg.MultiAgentMaxAgents,
+			MultiAgentMaxRounds:    cfg.MultiAgentMaxRounds,
+			MultiAgentBudgetTokens: cfg.MultiAgentBudgetTokens,
 		}, router),
 		docflow: document.New(document.Config{
 			Enabled:           cfg.DocumentOrchestrationEnabled,
@@ -244,6 +251,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "messages are required")
 		return
 	}
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "multi_agent") && !req.Reasoning.MultiAgentEnabled {
+		writeError(w, http.StatusBadRequest, "multi_agent_enabled must be true when reasoning.mode=multi_agent")
+		return
+	}
 	if req.MaxTokens == nil && s.cfg.DefaultMaxTokens > 0 {
 		v := s.cfg.DefaultMaxTokens
 		req.MaxTokens = &v
@@ -279,31 +290,58 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.EmotionalModulationEnabled {
 		req.Messages = injectToneMetadata(req.Messages, stateSnapshot)
 	}
+	requestedReasoningMode := ""
+	if req.Reasoning != nil {
+		requestedReasoningMode = strings.ToLower(strings.TrimSpace(req.Reasoning.Mode))
+		switch requestedReasoningMode {
+		case "tot", "pipeline":
+			if !s.cfg.ReasoningPipelineEnabled {
+				writeError(w, http.StatusBadRequest, "reasoning pipeline is disabled")
+				return
+			}
+		case "mcts":
+			if !s.cfg.ReasoningPipelineEnabled || !s.cfg.MCTSEnabled {
+				writeError(w, http.StatusBadRequest, "mcts reasoning mode is disabled")
+				return
+			}
+		case "multi_agent":
+			if !s.cfg.ReasoningPipelineEnabled || !s.cfg.MultiAgentEnabled {
+				writeError(w, http.StatusBadRequest, "multi_agent reasoning mode is disabled")
+				return
+			}
+		}
+	}
 
 	policyRec := s.policy.ResolveModelPolicy(ctx, tenantID)
 	routingReason := ""
 	routingClass := ""
 	autoRoute := s.cfg.OrchestratorEnabled && orchestrator.ShouldAutoRoute(req.Model)
-	if autoRoute {
-		modelsResp, err := s.upstream.ListModels(ctx)
+	docflowEligible := s.docflow.ShouldApply(req)
+	needsInventory := autoRoute || docflowEligible
+	available := []string{}
+	if needsInventory {
+		var err error
+		available, err = s.listAvailableModels(ctx)
 		if err != nil {
+			outcomeTag := "error|route=model_inventory_failed"
+			if autoRoute {
+				outcomeTag = "error|route=auto.model_inventory_failed"
+			}
 			s.audit.Record(ctx, model.AuditEvent{
 				TenantID:  tenantID,
 				ActorType: "api_key",
 				ActorID:   keyID,
 				Endpoint:  "/v1/chat/completions",
 				Model:     "",
-				Outcome:   "error|route=auto.model_inventory_failed",
+				Outcome:   outcomeTag,
 				LatencyMS: 0,
 				TraceID:   observability.TraceID(ctx),
 			})
 			writeError(w, http.StatusBadGateway, "upstream model inventory failed")
 			return
 		}
-		available := make([]string, 0, len(modelsResp.Data))
-		for _, m := range modelsResp.Data {
-			available = append(available, m.ID)
-		}
+	}
+	if autoRoute {
 		decision, err := s.router.ChooseWithState(req, available, policyRec, &stateSnapshot)
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "no allowed available model for auto routing")
@@ -320,11 +358,30 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if needsInventory {
+		canonical, found := canonicalModelID(req.Model, available)
+		if !found {
+			s.audit.Record(ctx, model.AuditEvent{
+				TenantID:  tenantID,
+				ActorType: "api_key",
+				ActorID:   keyID,
+				Endpoint:  "/v1/chat/completions",
+				Model:     req.Model,
+				Outcome:   "error|route=explicit.model_unavailable",
+				LatencyMS: 0,
+				TraceID:   observability.TraceID(ctx),
+			})
+			writeError(w, http.StatusServiceUnavailable, "requested model is not available upstream")
+			return
+		}
+		req.Model = canonical
+	}
+
 	if !policy.Allowed(req.Model, policyRec) {
 		writeError(w, http.StatusForbidden, "model not allowed")
 		return
 	}
-	if s.docflow.ShouldApply(req) {
+	if docflowEligible {
 		var docResult document.Result
 		docCtx, cancelDoc := context.WithTimeout(ctx, s.cfg.DocumentStageTimeout)
 		docReq, docRes, derr := s.docflow.Prepare(docCtx, s.upstream, req)
@@ -338,6 +395,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			docResult = docRes
 			if docResult.Applied {
 				w.Header().Set("X-GLM-Document-Orchestration", "applied")
+				w.Header().Set("X-GLM-Document-Model", req.Model)
 				w.Header().Set("X-GLM-Document-Count", strconv.Itoa(docResult.DocumentCount))
 				w.Header().Set("X-GLM-Document-Chunks", strconv.Itoa(docResult.ChunkCount))
 				w.Header().Set("X-GLM-Document-Links", strconv.Itoa(docResult.LinksCount))
@@ -413,7 +471,62 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-GLM-Reasoning-Pipeline", "fallback")
 			w.Header().Set("X-GLM-Reasoning-Error", "true")
 			log.Printf("reasoning pipeline failed, evaluating fail-open path: %v", err)
-			if reasonMode == "mcts" && s.cfg.MCTSFailOpen {
+			if reasonMode == "multi_agent" && s.cfg.MultiAgentFailOpen {
+				mctsReq := req
+				if mctsReq.Reasoning == nil {
+					mctsReq.Reasoning = &model.ReasoningOptions{}
+				}
+				mctsReq.Reasoning.Mode = "mcts"
+				mctsReq.Reasoning.MultiAgentEnabled = false
+				mctsCtx, cancelMCTS := context.WithTimeout(ctx, s.resolveReasoningTimeout(mctsReq))
+				resp, trace, err = s.reasoner.ExecuteMCTS(mctsCtx, s.upstream, mctsReq, policyRec, stateSnapshot)
+				cancelMCTS()
+				if err == nil {
+					reasoningTrace = &trace
+					w.Header().Set("X-GLM-Reasoning-Pipeline", "mcts")
+					w.Header().Set("X-GLM-MA-Fallback", "mcts")
+					if trace.MCTS != nil {
+						w.Header().Set("X-GLM-MCTS-Rollouts", strconv.Itoa(trace.MCTS.Rollouts))
+						w.Header().Set("X-GLM-MCTS-Depth", strconv.Itoa(trace.MCTS.Depth))
+						w.Header().Set("X-GLM-MCTS-Best-Score", formatFloat(trace.MCTS.BestScore))
+					}
+					outcome = outcome + "|ma_fallback=mcts"
+					if trace.ChosenModel != "" {
+						usedModel = trace.ChosenModel
+					}
+				} else {
+					log.Printf("multi-agent fail-open mcts failed: %v", err)
+					totReq := req
+					if totReq.Reasoning == nil {
+						totReq.Reasoning = &model.ReasoningOptions{}
+					}
+					totReq.Reasoning.Mode = "tot"
+					totReq.Reasoning.MultiAgentEnabled = false
+					totCtx, cancelTot := context.WithTimeout(ctx, s.cfg.ReasoningStageTimeout)
+					resp, trace, err = s.reasoner.ExecuteToT(totCtx, s.upstream, totReq, policyRec, stateSnapshot)
+					cancelTot()
+					if err == nil {
+						reasoningTrace = &trace
+						w.Header().Set("X-GLM-Reasoning-Pipeline", "tot")
+						w.Header().Set("X-GLM-Reasoning-Branches", strconv.Itoa(len(trace.Branches)))
+						w.Header().Set("X-GLM-MA-Fallback", "tot")
+						outcome = outcome + "|ma_fallback=tot|pipeline=tot"
+						if trace.ChosenModel != "" {
+							usedModel = trace.ChosenModel
+						}
+					} else {
+						log.Printf("multi-agent fail-open tot failed, falling back direct: %v", err)
+						directReq := req
+						directReq.Reasoning = nil
+						resp, err = s.upstream.ChatCompletions(ctx, directReq)
+						if err == nil {
+							w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
+							w.Header().Set("X-GLM-MA-Fallback", "direct")
+							outcome = outcome + "|ma_fallback=direct"
+						}
+					}
+				}
+			} else if reasonMode == "mcts" && s.cfg.MCTSFailOpen {
 				totReq := req
 				if totReq.Reasoning == nil {
 					totReq.Reasoning = &model.ReasoningOptions{}
@@ -424,6 +537,8 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				cancelTot()
 				if err == nil {
 					reasoningTrace = &trace
+					w.Header().Set("X-GLM-Reasoning-Pipeline", "tot")
+					w.Header().Set("X-GLM-Reasoning-Branches", strconv.Itoa(len(trace.Branches)))
 					w.Header().Set("X-GLM-MCTS-Fallback", "tot")
 					outcome = outcome + "|mcts_fallback=tot|pipeline=tot"
 					if trace.ChosenModel != "" {
@@ -435,13 +550,19 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					directReq.Reasoning = nil
 					resp, err = s.upstream.ChatCompletions(ctx, directReq)
 					if err == nil {
+						w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
 						w.Header().Set("X-GLM-MCTS-Fallback", "direct")
 						outcome = outcome + "|mcts_fallback=direct"
 					}
 				}
 			} else {
 				log.Printf("reasoning pipeline failed, falling back direct: %v", err)
-				resp, err = s.upstream.ChatCompletions(ctx, req)
+				directReq := req
+				directReq.Reasoning = nil
+				resp, err = s.upstream.ChatCompletions(ctx, directReq)
+				if err == nil {
+					w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
+				}
 			}
 		} else {
 			reasoningTrace = &trace
@@ -449,6 +570,22 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				usedModel = trace.ChosenModel
 			}
 			switch strings.ToLower(trace.Mode) {
+			case "multi_agent":
+				w.Header().Set("X-GLM-Reasoning-Pipeline", "multi_agent")
+				if trace.MultiAgent != nil {
+					w.Header().Set("X-GLM-MA-Agents", strconv.Itoa(trace.MultiAgent.Agents))
+					w.Header().Set("X-GLM-MA-Rounds", strconv.Itoa(trace.MultiAgent.Rounds))
+					w.Header().Set("X-GLM-MA-Winner", trace.MultiAgent.Winner)
+					w.Header().Set("X-GLM-MA-Consensus", trace.MultiAgent.Consensus)
+					outcome = outcome +
+						"|pipeline=multi_agent" +
+						"|ma_agents=" + strconv.Itoa(trace.MultiAgent.Agents) +
+						"|ma_rounds=" + strconv.Itoa(trace.MultiAgent.Rounds) +
+						"|ma_winner=" + trace.MultiAgent.Winner +
+						"|ma_consensus=" + trace.MultiAgent.Consensus
+				} else {
+					outcome = outcome + "|pipeline=multi_agent"
+				}
 			case "mcts":
 				w.Header().Set("X-GLM-Reasoning-Pipeline", "mcts")
 				if trace.MCTS != nil {
@@ -474,6 +611,9 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
+		if requestedReasoningMode != "" {
+			w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
+		}
 		resp, err = s.upstream.ChatCompletions(ctx, req)
 	}
 	if err != nil && policyRec.FallbackModel != "" && policyRec.FallbackModel != req.Model {
@@ -1026,7 +1166,48 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
+func (s *Server) listAvailableModels(ctx context.Context) ([]string, error) {
+	modelsResp, err := s.upstream.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	available := make([]string, 0, len(modelsResp.Data))
+	for _, m := range modelsResp.Data {
+		available = append(available, m.ID)
+	}
+	return available, nil
+}
+
+func canonicalModelID(requested string, available []string) (string, bool) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return "", false
+	}
+	for _, m := range available {
+		if strings.EqualFold(strings.TrimSpace(m), requested) {
+			return m, true
+		}
+	}
+	return "", false
+}
+
 func (s *Server) resolveReasoningTimeout(req model.ChatCompletionRequest) time.Duration {
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "multi_agent") {
+		timeout := s.cfg.MultiAgentStageTimeout
+		if timeout <= 0 {
+			timeout = 45 * time.Second
+		}
+		if req.Reasoning.MultiAgentTimeoutMs > 0 {
+			override := time.Duration(req.Reasoning.MultiAgentTimeoutMs) * time.Millisecond
+			if override < timeout {
+				timeout = override
+			}
+		}
+		if timeout < time.Second {
+			return time.Second
+		}
+		return timeout
+	}
 	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "mcts") {
 		timeout := s.cfg.MCTSStageTimeout
 		if timeout <= 0 {

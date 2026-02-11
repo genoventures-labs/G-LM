@@ -3,6 +3,7 @@ package reasoning
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mike/cognitive-llm/internal/model"
@@ -78,12 +79,19 @@ func TestShouldExecute(t *testing.T) {
 		MCTSDefaultDepth:       3,
 		MCTSMaxDepth:           5,
 		MCTSDefaultExploration: 1.2,
+		MultiAgentEnabled:      true,
+		MultiAgentMaxAgents:    4,
+		MultiAgentMaxRounds:    2,
+		MultiAgentBudgetTokens: 1200,
 	}, r)
 	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "tot"}}, state.CognitiveState{}) {
 		t.Fatal("expected tot mode to execute")
 	}
 	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "mcts"}}, state.CognitiveState{}) {
 		t.Fatal("expected mcts mode to execute when enabled")
+	}
+	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "multi_agent"}}, state.CognitiveState{}) {
+		t.Fatal("expected multi_agent mode to execute when enabled")
 	}
 	if e.ShouldExecute(model.ChatCompletionRequest{}, state.CognitiveState{}) {
 		t.Fatal("expected nil reasoning to skip")
@@ -128,6 +136,73 @@ func TestExecutorMCTSModeProducesTrace(t *testing.T) {
 	}
 	if trace.MCTS.Rollouts < 1 {
 		t.Fatalf("expected positive rollouts, got %d", trace.MCTS.Rollouts)
+	}
+	if resp.Model == "" {
+		t.Fatal("expected response model")
+	}
+}
+
+type mctsFailingUpstream struct{}
+
+func (m *mctsFailingUpstream) ListModels(ctx context.Context) (model.ModelListResponse, error) {
+	return model.ModelListResponse{Data: []model.ModelInfo{{ID: "qwen3:4b"}, {ID: "mistral:7b"}}}, nil
+}
+
+func (m *mctsFailingUpstream) ChatCompletions(ctx context.Context, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
+	if len(req.Messages) > 0 && strings.HasPrefix(req.Messages[0].Content, "mcts_agent path context:") {
+		return model.ChatCompletionResponse{}, fmt.Errorf("simulated mcts rollout failure")
+	}
+	resp := model.ChatCompletionResponse{Model: req.Model}
+	resp.Choices = []struct {
+		Index   int `json:"index"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason,omitempty"`
+	}{{
+		Index: 0,
+		Message: struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}{Role: "assistant", Content: "baseline response"},
+	}}
+	return resp, nil
+}
+
+func TestExecutorMCTSFallsBackToBaselineWhenRolloutsFail(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                true,
+		MCTSEnabled:            true,
+		MCTSDefaultRollouts:    4,
+		MCTSMaxRollouts:        8,
+		MCTSDefaultDepth:       2,
+		MCTSMaxDepth:           3,
+		MCTSDefaultExploration: 1.2,
+	}, r)
+	up := &mctsFailingUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:            "mcts",
+			MCTSMaxRollouts: 4,
+			MCTSMaxDepth:    2,
+		},
+		Messages: []model.Message{{Role: "user", Content: "Plan a rollout"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "general"}
+
+	resp, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("expected mcts baseline fallback to succeed, got %v", err)
+	}
+	if trace.MCTS == nil {
+		t.Fatal("expected mcts trace payload")
+	}
+	if trace.MCTS.Fallback != "direct_baseline" {
+		t.Fatalf("expected direct_baseline fallback, got %q", trace.MCTS.Fallback)
 	}
 	if resp.Model == "" {
 		t.Fatal("expected response model")

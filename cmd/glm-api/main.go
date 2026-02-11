@@ -57,6 +57,11 @@ func main() {
 				log.Fatalf("eval-v2 failed: %v", err)
 			}
 			return
+		case "stress-multi-agent":
+			if err := runStressMultiAgent(cfg, os.Args[2:]); err != nil {
+				log.Fatalf("stress-multi-agent failed: %v", err)
+			}
+			return
 		}
 	}
 
@@ -504,6 +509,257 @@ type evalCase struct {
 	ExpectBody           bool
 }
 
+type stressRun struct {
+	Index      int    `json:"index"`
+	OK         bool   `json:"ok"`
+	StatusCode int    `json:"status_code"`
+	Pipeline   string `json:"pipeline,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Winner     string `json:"winner,omitempty"`
+	Consensus  string `json:"consensus,omitempty"`
+	Fallback   string `json:"fallback,omitempty"`
+	LatencyMS  int64  `json:"latency_ms"`
+	Error      string `json:"error,omitempty"`
+}
+
+type pathLatencyStat struct {
+	Count        int     `json:"count"`
+	LatencyAvgMS float64 `json:"latency_avg_ms"`
+	LatencyMaxMS int64   `json:"latency_max_ms"`
+}
+
+func runStressMultiAgent(cfg config.Config, args []string) error {
+	fs := flag.NewFlagSet("stress-multi-agent", flag.ContinueOnError)
+	baseURL := fs.String("base-url", "http://localhost:8081", "glm-api base URL")
+	apiKey := fs.String("api-key", "", "glm api key (or set ADMIN_KEY)")
+	runs := fs.Int("runs", 20, "number of stress iterations")
+	timeoutSec := fs.Int("timeout-seconds", 180, "http timeout")
+	model := fs.String("model", "auto", "model override")
+	maxTokens := fs.Int("max-tokens", 128, "max tokens per request")
+	maMaxAgents := fs.Int("multi-agent-max-agents", 3, "multi-agent max agents override (2-4)")
+	maMaxRounds := fs.Int("multi-agent-max-rounds", 1, "multi-agent max rounds override (1-4)")
+	maTimeoutMs := fs.Int("multi-agent-timeout-ms", 30000, "per-request multi-agent timeout override")
+	mctsTimeoutMs := fs.Int("mcts-timeout-ms", 20000, "per-request mcts timeout override for fail-open chain")
+	maBudgetTokens := fs.Int("multi-agent-budget-tokens", 700, "multi-agent budget tokens override")
+	strict := fs.Bool("strict", false, "return non-zero on any failed run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *runs < 1 {
+		*runs = 1
+	}
+	if *runs > 500 {
+		*runs = 500
+	}
+	if *maxTokens < 32 {
+		*maxTokens = 32
+	}
+	if *maMaxAgents < 2 {
+		*maMaxAgents = 2
+	}
+	if *maMaxAgents > 4 {
+		*maMaxAgents = 4
+	}
+	if *maMaxRounds < 1 {
+		*maMaxRounds = 1
+	}
+	if *maMaxRounds > 4 {
+		*maMaxRounds = 4
+	}
+	if *maTimeoutMs < 2000 {
+		*maTimeoutMs = 2000
+	}
+	if *mctsTimeoutMs < 2000 {
+		*mctsTimeoutMs = 2000
+	}
+	if *maBudgetTokens < 200 {
+		*maBudgetTokens = 200
+	}
+
+	if strings.TrimSpace(*apiKey) == "" {
+		if v := strings.TrimSpace(os.Getenv("ADMIN_KEY")); v != "" {
+			*apiKey = v
+		} else if v, ok := loadValidKeySession(); ok {
+			*apiKey = v
+		}
+	}
+	if strings.TrimSpace(*apiKey) == "" {
+		return fmt.Errorf("missing api key (pass --api-key or set ADMIN_KEY)")
+	}
+
+	client := &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second}
+	results := make([]stressRun, 0, *runs)
+	pipelineCounts := map[string]int{}
+	pathCounts := map[string]int{}
+	winnerCounts := map[string]int{}
+	consensusCounts := map[string]int{}
+	fallbackCounts := map[string]int{}
+	pathLatencySum := map[string]int64{}
+	pathLatencyMax := map[string]int64{}
+	success := 0
+
+	prompt := "Stress test role dynamics in a controlled offensive-security tabletop scenario. " +
+		"Researcher proposes a hypothetical exploit chain at high level, Critic challenges assumptions and defenses. " +
+		"Do not provide actionable exploitation steps, payloads, commands, CVEs, or target-specific instructions. " +
+		"Output a concise winner decision with reasoning quality and risk critique."
+
+	for i := 1; i <= *runs; i++ {
+		payload := map[string]any{
+			"task":       "reasoning",
+			"model":      *model,
+			"max_tokens": *maxTokens,
+			"input":      prompt,
+			"reasoning": map[string]any{
+				"mode":                      "multi_agent",
+				"multi_agent_enabled":       true,
+				"multi_agent_max_agents":    *maMaxAgents,
+				"multi_agent_max_rounds":    *maMaxRounds,
+				"multi_agent_budget_tokens": *maBudgetTokens,
+				"multi_agent_timeout_ms":    *maTimeoutMs,
+				"mcts_timeout_ms":           *mctsTimeoutMs,
+			},
+		}
+		b, _ := json.Marshal(payload)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, strings.TrimRight(*baseURL, "/")+"/v1/cognition", bytes.NewReader(b))
+		req.Header.Set("Authorization", "Bearer "+*apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		start := time.Now()
+		resp, err := client.Do(req)
+		if err != nil {
+			results = append(results, stressRun{
+				Index:     i,
+				OK:        false,
+				LatencyMS: time.Since(start).Milliseconds(),
+				Error:     err.Error(),
+			})
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		run := stressRun{
+			Index:      i,
+			StatusCode: resp.StatusCode,
+			LatencyMS:  time.Since(start).Milliseconds(),
+			Pipeline:   strings.ToLower(strings.TrimSpace(resp.Header.Get("X-GLM-Reasoning-Pipeline"))),
+			Winner:     strings.TrimSpace(resp.Header.Get("X-GLM-MA-Winner")),
+			Consensus:  strings.ToLower(strings.TrimSpace(resp.Header.Get("X-GLM-MA-Consensus"))),
+			Fallback:   strings.ToLower(strings.TrimSpace(resp.Header.Get("X-GLM-MA-Fallback"))),
+		}
+		run.Path = deriveStressExecutionPath(resp.Header)
+		if resp.StatusCode == http.StatusOK {
+			run.OK = true
+			success++
+		} else {
+			run.OK = false
+			run.Error = fmt.Sprintf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		if run.Pipeline != "" {
+			pipelineCounts[run.Pipeline]++
+		}
+		if run.Path != "" {
+			pathCounts[run.Path]++
+			pathLatencySum[run.Path] += run.LatencyMS
+			if run.LatencyMS > pathLatencyMax[run.Path] {
+				pathLatencyMax[run.Path] = run.LatencyMS
+			}
+		}
+		if run.Winner != "" {
+			winnerCounts[run.Winner]++
+		}
+		if run.Consensus != "" {
+			consensusCounts[run.Consensus]++
+		}
+		if run.Fallback != "" {
+			fallbackCounts[run.Fallback]++
+		}
+		results = append(results, run)
+	}
+
+	totalLatency := int64(0)
+	maxLatency := int64(0)
+	for _, r := range results {
+		totalLatency += r.LatencyMS
+		if r.LatencyMS > maxLatency {
+			maxLatency = r.LatencyMS
+		}
+	}
+	avgLatency := float64(0)
+	if len(results) > 0 {
+		avgLatency = float64(totalLatency) / float64(len(results))
+	}
+	pathStats := map[string]pathLatencyStat{}
+	for path, count := range pathCounts {
+		if count <= 0 {
+			continue
+		}
+		pathStats[path] = pathLatencyStat{
+			Count:        count,
+			LatencyAvgMS: float64(pathLatencySum[path]) / float64(count),
+			LatencyMaxMS: pathLatencyMax[path],
+		}
+	}
+
+	out := map[string]any{
+		"ok":              success == *runs,
+		"runs":            *runs,
+		"success":         success,
+		"failure":         *runs - success,
+		"success_rate":    fmt.Sprintf("%.2f%%", (float64(success)/float64(*runs))*100),
+		"latency_avg_ms":  fmt.Sprintf("%.1f", avgLatency),
+		"latency_max_ms":  maxLatency,
+		"pipelines":       pipelineCounts,
+		"execution_paths": pathCounts,
+		"path_latency":    pathStats,
+		"winners":         winnerCounts,
+		"consensus":       consensusCounts,
+		"fallbacks":       fallbackCounts,
+		"theme":           "researcher_vs_critic_offsec_chain_tabletop",
+		"non_actionable":  true,
+		"strict":          *strict,
+		"config": map[string]any{
+			"http_timeout_seconds":      *timeoutSec,
+			"max_tokens":                *maxTokens,
+			"multi_agent_max_agents":    *maMaxAgents,
+			"multi_agent_max_rounds":    *maMaxRounds,
+			"multi_agent_timeout_ms":    *maTimeoutMs,
+			"mcts_timeout_ms":           *mctsTimeoutMs,
+			"multi_agent_budget_tokens": *maBudgetTokens,
+		},
+		"detailed_results": results,
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
+	if *strict && success != *runs {
+		return fmt.Errorf("stress-multi-agent had failures (%d/%d)", *runs-success, *runs)
+	}
+	return nil
+}
+
+func deriveStressExecutionPath(h http.Header) string {
+	pipeline := strings.ToLower(strings.TrimSpace(h.Get("X-GLM-Reasoning-Pipeline")))
+	maFallback := strings.ToLower(strings.TrimSpace(h.Get("X-GLM-MA-Fallback")))
+	mctsFallback := strings.ToLower(strings.TrimSpace(h.Get("X-GLM-MCTS-Fallback")))
+
+	if maFallback != "" {
+		if pipeline != "" {
+			return "multi_agent->" + maFallback + "->" + pipeline
+		}
+		return "multi_agent->" + maFallback
+	}
+	if mctsFallback != "" {
+		if pipeline != "" {
+			return "mcts->" + mctsFallback + "->" + pipeline
+		}
+		return "mcts->" + mctsFallback
+	}
+	if pipeline != "" {
+		return pipeline
+	}
+	return "unknown"
+}
+
 func runEvalV2(cfg config.Config, args []string) error {
 	fs := flag.NewFlagSet("eval-v2", flag.ContinueOnError)
 	baseURL := fs.String("base-url", "http://localhost:8081", "glm-api base URL")
@@ -603,6 +859,23 @@ func runEvalV2(cfg config.Config, args []string) error {
 			ExpectAny:  map[string][]string{"X-GLM-Reasoning-Pipeline": {"mcts", "fallback"}},
 			ExpectBody: true,
 		},
+		{
+			Name: "multi-agent-reasoning",
+			Payload: map[string]any{
+				"task":       "reasoning",
+				"input":      "Compare two rollout options and choose one with controls.",
+				"max_tokens": 96,
+				"reasoning": map[string]any{
+					"mode":                   "multi_agent",
+					"multi_agent_enabled":    true,
+					"multi_agent_max_agents": 4,
+					"multi_agent_max_rounds": 2,
+				},
+			},
+			ExpectHdrs: []string{"X-GLM-Reasoning-Pipeline"},
+			ExpectAny:  map[string][]string{"X-GLM-Reasoning-Pipeline": {"multi_agent", "fallback"}},
+			ExpectBody: true,
+		},
 	}
 
 	client := &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second}
@@ -670,7 +943,30 @@ func runEvalV2(cfg config.Config, args []string) error {
 			}
 		}
 		pipeline := strings.ToLower(strings.TrimSpace(resp.Header.Get("X-GLM-Reasoning-Pipeline")))
-		if pipeline == "mcts" {
+		if pipeline == "multi_agent" {
+			for _, hdr := range []string{"X-GLM-MA-Agents", "X-GLM-MA-Rounds", "X-GLM-MA-Winner", "X-GLM-MA-Consensus"} {
+				v := strings.TrimSpace(resp.Header.Get(hdr))
+				add(tc.Name+".ma_"+strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(hdr, "X-GLM-MA-"), "-", "_")), v != "", "value="+v)
+			}
+			if v := strings.TrimSpace(resp.Header.Get("X-GLM-MA-Agents")); v != "" {
+				if n, err := strconv.Atoi(v); err != nil || n < 1 {
+					add(tc.Name+".ma_agents_range", false, "value="+v)
+				} else {
+					add(tc.Name+".ma_agents_range", true, "value="+v)
+				}
+			}
+			if v := strings.TrimSpace(resp.Header.Get("X-GLM-MA-Rounds")); v != "" {
+				if n, err := strconv.Atoi(v); err != nil || n < 1 {
+					add(tc.Name+".ma_rounds_range", false, "value="+v)
+				} else {
+					add(tc.Name+".ma_rounds_range", true, "value="+v)
+				}
+			}
+			if v := strings.ToLower(strings.TrimSpace(resp.Header.Get("X-GLM-MA-Consensus"))); v != "" {
+				ok := v == "high" || v == "medium" || v == "low"
+				add(tc.Name+".ma_consensus_set", ok, "value="+v)
+			}
+		} else if pipeline == "mcts" {
 			if v := strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Rollouts")); v != "" {
 				if n, err := strconv.Atoi(v); err != nil || n < 1 {
 					add(tc.Name+".mcts_rollouts", false, "value="+v)
@@ -698,6 +994,10 @@ func runEvalV2(cfg config.Config, args []string) error {
 			} else {
 				add(tc.Name+".mcts_best_score", false, "missing")
 			}
+		} else if strings.TrimSpace(resp.Header.Get("X-GLM-MA-Fallback")) != "" {
+			v := strings.TrimSpace(resp.Header.Get("X-GLM-MA-Fallback"))
+			ok := strings.EqualFold(v, "mcts") || strings.EqualFold(v, "tot") || strings.EqualFold(v, "direct")
+			add(tc.Name+".ma_fallback", ok, "value="+v)
 		} else if strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Fallback")) != "" {
 			v := strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Fallback"))
 			ok := strings.EqualFold(v, "tot") || strings.EqualFold(v, "direct")

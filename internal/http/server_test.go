@@ -17,15 +17,18 @@ import (
 )
 
 type fakeUpstream struct {
-	models        []string
-	lastModelUsed string
-	lastRequest   model.ChatCompletionRequest
-	failMCTS      bool
-	failDirect    bool
-	failToT       bool
+	models         []string
+	listCalls      int
+	lastModelUsed  string
+	lastRequest    model.ChatCompletionRequest
+	failMCTS       bool
+	failMultiAgent bool
+	failDirect     bool
+	failToT        bool
 }
 
 func (f *fakeUpstream) ListModels(ctx context.Context) (model.ModelListResponse, error) {
+	f.listCalls++
 	if len(f.models) == 0 {
 		f.models = []string{"mistral:7b"}
 	}
@@ -44,6 +47,9 @@ func (f *fakeUpstream) ChatCompletions(ctx context.Context, req model.ChatComple
 		mode := req.Reasoning.Mode
 		if f.failMCTS && mode == "mcts" {
 			return model.ChatCompletionResponse{}, fmt.Errorf("mcts failure")
+		}
+		if f.failMultiAgent && mode == "multi_agent" {
+			return model.ChatCompletionResponse{}, fmt.Errorf("multi-agent failure")
 		}
 		if f.failToT && (mode == "tot" || mode == "pipeline") {
 			return model.ChatCompletionResponse{}, fmt.Errorf("tot failure")
@@ -92,6 +98,12 @@ func setupServerWithTenant(t *testing.T) (*Server, string, string, string, *fake
 		MCTSDefaultExploration:           1.2,
 		MCTSStageTimeout:                 10 * time.Second,
 		MCTSFailOpen:                     true,
+		MultiAgentEnabled:                true,
+		MultiAgentMaxAgents:              4,
+		MultiAgentMaxRounds:              2,
+		MultiAgentStageTimeout:           10 * time.Second,
+		MultiAgentBudgetTokens:           1200,
+		MultiAgentFailOpen:               true,
 		IntentPreprocessorEnabled:        true,
 		IntentAmbiguityThreshold:         0.62,
 		DocumentOrchestrationEnabled:     true,
@@ -496,6 +508,157 @@ func TestMCTSReasoningHeaders(t *testing.T) {
 	}
 }
 
+func TestMultiAgentReasoningHeaders(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":                   "multi_agent",
+			"multi_agent_enabled":    true,
+			"multi_agent_max_agents": 4,
+			"multi_agent_max_rounds": 2,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Assess rollout options and choose with risk controls"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "multi_agent" {
+		t.Fatalf("expected multi_agent pipeline header, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
+	}
+	if rr.Header().Get("X-GLM-MA-Agents") == "" {
+		t.Fatal("expected X-GLM-MA-Agents header")
+	}
+	if rr.Header().Get("X-GLM-MA-Rounds") == "" {
+		t.Fatal("expected X-GLM-MA-Rounds header")
+	}
+	if rr.Header().Get("X-GLM-MA-Winner") == "" {
+		t.Fatal("expected X-GLM-MA-Winner header")
+	}
+	if rr.Header().Get("X-GLM-MA-Consensus") == "" {
+		t.Fatal("expected X-GLM-MA-Consensus header")
+	}
+}
+
+func TestMultiAgentEnabledGuard(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":                "multi_agent",
+			"multi_agent_enabled": false,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestReasoningModeDisabledReturns400(t *testing.T) {
+	st := memory.New()
+	up := &fakeUpstream{models: []string{"mistral:7b"}}
+	cfg := config.Config{
+		DefaultModel:                 "mistral:7b",
+		RateLimitRPM:                 100,
+		ReasoningPipelineEnabled:     false,
+		MCTSEnabled:                  false,
+		MultiAgentEnabled:            false,
+		ReasoningHiddenByDefault:     true,
+		IntentPreprocessorEnabled:    true,
+		DocumentOrchestrationEnabled: true,
+		MemoryDynamicsEnabled:        true,
+		StyleContractEnabled:         true,
+		MetaReasoningEnabled:         true,
+	}
+	srv := NewServer(cfg, st, up)
+	a := auth.NewService(st)
+	tenant, err := st.CreateTenant(context.Background(), "acme-disabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeKey, _, err := a.GenerateAPIKey(context.Background(), tenant.ID, []string{"runtime:*"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":                "multi_agent",
+			"multi_agent_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestMultiAgentFailureFallsBackToMCTS(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	up.failMultiAgent = true
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":                "multi_agent",
+			"multi_agent_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Plan deployment safely"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-MA-Fallback") != "mcts" {
+		t.Fatalf("expected multi-agent fallback mcts, got %q", rr.Header().Get("X-GLM-MA-Fallback"))
+	}
+}
+
+func TestMultiAgentFailureChainFallsBackToDirect(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	up.failMultiAgent = true
+	up.failMCTS = true
+	up.failToT = true
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":                "multi_agent",
+			"multi_agent_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Plan deployment safely"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-MA-Fallback") != "direct" {
+		t.Fatalf("expected multi-agent fallback direct, got %q", rr.Header().Get("X-GLM-MA-Fallback"))
+	}
+}
+
 func TestMCTSFailureFallsBackToToT(t *testing.T) {
 	srv, _, runtimeKey, up := setupServer(t)
 	up.failMCTS = true
@@ -617,6 +780,12 @@ func TestDocumentOrchestrationHeaders(t *testing.T) {
 	if rr.Header().Get("X-GLM-Document-Chunks") == "" {
 		t.Fatal("expected document chunk header")
 	}
+	if rr.Header().Get("X-GLM-Document-Model") != "mistral:7b" {
+		t.Fatalf("expected document model header mistral:7b, got %q", rr.Header().Get("X-GLM-Document-Model"))
+	}
+	if up.listCalls != 1 {
+		t.Fatalf("expected one inventory lookup, got %d", up.listCalls)
+	}
 	found := false
 	for _, m := range up.lastRequest.Messages {
 		if m.Role == "system" && bytes.Contains([]byte(m.Content), []byte("document_orchestration")) {
@@ -626,6 +795,61 @@ func TestDocumentOrchestrationHeaders(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected orchestration context injected into request")
+	}
+}
+
+func TestDocumentOrchestrationExplicitUnavailableModelReturns503(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "missing-model",
+		"documents": []map[string]any{
+			{
+				"id":    "doc-1",
+				"title": "Runbook",
+				"text":  "Service rollout plan with phases and controls.",
+			},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Create a consolidated rollout approach"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAutoRoutingWithDocflowUsesSingleInventoryLookup(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	body := map[string]any{
+		"model": "auto",
+		"documents": []map[string]any{
+			{
+				"id":    "doc-1",
+				"title": "Runbook",
+				"text":  "Service rollout plan with phases and controls.",
+			},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Create a consolidated rollout approach"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if up.listCalls != 1 {
+		t.Fatalf("expected one inventory lookup, got %d", up.listCalls)
+	}
+	if rr.Header().Get("X-GLM-Routed-Model") == "" {
+		t.Fatal("expected routed model header")
+	}
+	if rr.Header().Get("X-GLM-Document-Model") == "" {
+		t.Fatal("expected document model header")
 	}
 }
 
@@ -721,6 +945,29 @@ func TestCognitionRouteMCTSReasoning(t *testing.T) {
 	}
 	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "mcts" {
 		t.Fatalf("expected mcts pipeline, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
+	}
+}
+
+func TestCognitionRouteMultiAgentReasoning(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"task":  "reasoning",
+		"input": "Compare two options and decide",
+		"reasoning": map[string]any{
+			"mode":                "multi_agent",
+			"multi_agent_enabled": true,
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/cognition", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "multi_agent" {
+		t.Fatalf("expected multi_agent pipeline, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
 	}
 }
 

@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Document orchestration now relies on live upstream model inventory for request-time model validation/resolution rather than implicit model passthrough.
+- Gateway reuses a single `/api/v1/models` inventory fetch per request when auto-routing or document orchestration is active.
+- Document chunk/document summarization subcalls now run on the same resolved final model (single-model lane).
+
+### Added
+- New response header when document orchestration is applied:
+  - `X-GLM-Document-Model`
+- Explicit model canonicalization against live inventory (case-insensitive match to upstream model id).
+
+### Fixed
+- Explicit unavailable models now fail fast with `503 requested model is not available upstream` and audit outcome tag `route=explicit.model_unavailable`.
+- Added coverage to ensure one inventory lookup in auto+docflow paths and explicit-unavailable handling.
+
 ## [0.1.1] - 2026-02-11
 
 ### Added

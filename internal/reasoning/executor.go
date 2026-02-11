@@ -30,6 +30,10 @@ type Config struct {
 	MCTSDefaultDepth       int
 	MCTSMaxDepth           int
 	MCTSDefaultExploration float64
+	MultiAgentEnabled      bool
+	MultiAgentMaxAgents    int
+	MultiAgentMaxRounds    int
+	MultiAgentBudgetTokens int
 }
 
 type Executor struct {
@@ -70,6 +74,7 @@ type Trace struct {
 	Branches       []BranchResult      `json:"branches"`
 	Contradictions ContradictionReport `json:"contradictions"`
 	MCTS           *MCTSResult         `json:"mcts,omitempty"`
+	MultiAgent     *MultiAgentResult   `json:"multi_agent,omitempty"`
 	Nodes          []Node              `json:"nodes"`
 }
 
@@ -77,6 +82,15 @@ type MCTSResult struct {
 	Rollouts  int     `json:"rollouts"`
 	Depth     int     `json:"depth"`
 	BestScore float64 `json:"best_score"`
+	Fallback  string  `json:"fallback,omitempty"`
+}
+
+type MultiAgentResult struct {
+	Agents    int     `json:"agents"`
+	Rounds    int     `json:"rounds"`
+	Winner    string  `json:"winner"`
+	Consensus string  `json:"consensus"`
+	Score     float64 `json:"score"`
 	Fallback  string  `json:"fallback,omitempty"`
 }
 
@@ -102,6 +116,15 @@ func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
 	if cfg.MCTSDefaultExploration <= 0 {
 		cfg.MCTSDefaultExploration = 1.2
 	}
+	if cfg.MultiAgentMaxAgents <= 0 {
+		cfg.MultiAgentMaxAgents = 4
+	}
+	if cfg.MultiAgentMaxRounds <= 0 {
+		cfg.MultiAgentMaxRounds = 2
+	}
+	if cfg.MultiAgentBudgetTokens <= 0 {
+		cfg.MultiAgentBudgetTokens = 700
+	}
 	return &Executor{cfg: cfg, router: router}
 }
 
@@ -118,6 +141,8 @@ func (e *Executor) ShouldExecute(req model.ChatCompletionRequest, st state.Cogni
 		return true
 	case "mcts":
 		return e.cfg.MCTSEnabled
+	case "multi_agent":
+		return e.cfg.MultiAgentEnabled
 	case "auto":
 		return st.TaskMode == "coding" || st.TaskMode == "general"
 	default:
@@ -132,6 +157,9 @@ func (e *Executor) Execute(
 	pol model.ModelPolicy,
 	st state.CognitiveState,
 ) (model.ChatCompletionResponse, Trace, error) {
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "multi_agent") {
+		return e.executeMultiAgent(ctx, up, req, pol, st)
+	}
 	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "mcts") {
 		return e.executeMCTS(ctx, up, req, pol, st)
 	}
@@ -146,6 +174,26 @@ func (e *Executor) ExecuteToT(
 	st state.CognitiveState,
 ) (model.ChatCompletionResponse, Trace, error) {
 	return e.executeToT(ctx, up, req, pol, st)
+}
+
+func (e *Executor) ExecuteMCTS(
+	ctx context.Context,
+	up Upstream,
+	req model.ChatCompletionRequest,
+	pol model.ModelPolicy,
+	st state.CognitiveState,
+) (model.ChatCompletionResponse, Trace, error) {
+	return e.executeMCTS(ctx, up, req, pol, st)
+}
+
+func (e *Executor) ExecuteMultiAgent(
+	ctx context.Context,
+	up Upstream,
+	req model.ChatCompletionRequest,
+	pol model.ModelPolicy,
+	st state.CognitiveState,
+) (model.ChatCompletionResponse, Trace, error) {
+	return e.executeMultiAgent(ctx, up, req, pol, st)
 }
 
 func (e *Executor) executeToT(

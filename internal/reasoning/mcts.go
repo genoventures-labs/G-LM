@@ -123,8 +123,14 @@ func (e *Executor) executeMCTS(
 	}
 
 	if len(candidates) == 0 {
-		trace.Nodes = nodes
-		return model.ChatCompletionResponse{}, trace, fmt.Errorf("mcts failed: no successful rollouts")
+		baseline, baselineNode, baselineErr := e.mctsBaselineCandidate(ctx, up, req, baseModel, st)
+		nodes = append(nodes, baselineNode)
+		if baselineErr != nil {
+			trace.Nodes = nodes
+			return model.ChatCompletionResponse{}, trace, fmt.Errorf("mcts failed: no successful rollouts")
+		}
+		candidates = append(candidates, baseline)
+		maxVisitedDepth = maxInt(1, maxVisitedDepth)
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -168,6 +174,9 @@ func (e *Executor) executeMCTS(
 		Rollouts:  len(candidates),
 		Depth:     maxVisitedDepth,
 		BestScore: best.Score,
+	}
+	if len(candidates) == 1 && len(candidates[0].Path) == 0 {
+		trace.MCTS.Fallback = "direct_baseline"
 	}
 	return finalResp, trace, nil
 }
@@ -330,6 +339,57 @@ func clonePath(in []string) []string {
 	}
 	out := make([]string, len(in))
 	copy(out, in)
+	return out
+}
+
+func (e *Executor) mctsBaselineCandidate(
+	ctx context.Context,
+	up Upstream,
+	req model.ChatCompletionRequest,
+	modelID string,
+	st state.CognitiveState,
+) (mctsCandidate, Node, error) {
+	if err := ctx.Err(); err != nil {
+		return mctsCandidate{}, Node{}, err
+	}
+	node := Node{
+		ID:        "mcts-baseline",
+		Type:      "mcts_baseline",
+		Model:     modelID,
+		StartedAt: time.Now().UTC(),
+	}
+	baselineReq := req
+	baselineReq.Model = modelID
+	baselineReq.Messages = buildMCTSBaselineMessages(req.Messages)
+	resp, err := up.ChatCompletions(ctx, baselineReq)
+	node.EndedAt = time.Now().UTC()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		node.Error = ctxErr.Error()
+		return mctsCandidate{}, node, ctxErr
+	}
+	if err != nil {
+		node.Error = err.Error()
+		return mctsCandidate{}, node, err
+	}
+	output := extractAssistantText(resp)
+	score, _ := e.selfEvaluate(output, st)
+	score = applyMCTSStatePenalty(score, st)
+	node.Score = score
+	return mctsCandidate{
+		Path:   nil,
+		Output: output,
+		Score:  score,
+	}, node, nil
+}
+
+func buildMCTSBaselineMessages(base []model.Message) []model.Message {
+	sys := model.Message{
+		Role:    "system",
+		Content: "mcts baseline responder: provide a concise, actionable answer with assumptions and controls.",
+	}
+	out := make([]model.Message, 0, len(base)+1)
+	out = append(out, sys)
+	out = append(out, base...)
 	return out
 }
 

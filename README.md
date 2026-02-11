@@ -57,6 +57,26 @@ Run V2 style-cognition evaluation (style contract + micro-switch + subtext assis
 go run ./cmd/glm-api eval-v2 --base-url http://localhost:8081
 ```
 
+Run multi-agent stress test (Researcher/Critic debate theme):
+
+```bash
+go run ./cmd/glm-api stress-multi-agent --base-url http://localhost:8081 --runs 20
+```
+
+Recommended bounded run (faster, more stable under load):
+
+```bash
+go run ./cmd/glm-api stress-multi-agent \
+  --base-url http://localhost:8081 \
+  --runs 20 \
+  --multi-agent-max-agents 3 \
+  --multi-agent-max-rounds 1 \
+  --max-tokens 96 \
+  --multi-agent-timeout-ms 30000 \
+  --mcts-timeout-ms 20000 \
+  --multi-agent-budget-tokens 700
+```
+
 Optional flags:
 
 ```bash
@@ -106,6 +126,12 @@ If you intentionally run without PocketBase auth, set `GLM_POCKETBASE_ALLOW_UNAU
 - `GLM_MCTS_DEFAULT_EXPLORATION` (default: `1.20`)
 - `GLM_MCTS_STAGE_TIMEOUT_SECONDS` (default: `35`)
 - `GLM_MCTS_FAILOPEN` (default: `true`)
+- `GLM_MULTI_AGENT_ENABLED` (default: `true`)
+- `GLM_MULTI_AGENT_MAX_AGENTS` (default: `4`)
+- `GLM_MULTI_AGENT_MAX_ROUNDS` (default: `2`)
+- `GLM_MULTI_AGENT_STAGE_TIMEOUT_SECONDS` (default: `45`)
+- `GLM_MULTI_AGENT_BUDGET_TOKENS` (default: `700`)
+- `GLM_MULTI_AGENT_FAILOPEN` (default: `true`)
 - `GLM_INTENT_PREPROCESSOR_ENABLED` (default: `true`)
 - `GLM_INTENT_AMBIGUITY_THRESHOLD` (default: `0.62`)
 - `GLM_DOCUMENT_ORCHESTRATION_ENABLED` (default: `true`)
@@ -128,6 +154,7 @@ If you intentionally run without PocketBase auth, set `GLM_POCKETBASE_ALLOW_UNAU
 - `GLM_META_REASONING_DEFAULT_PROFILE` (default: `default`)
 - `GLM_META_REASONING_ACCEPT_THRESHOLD` (default: `0.72`)
 - `GLM_META_REASONING_STRICT_THRESHOLD` (default: `0.82`)
+- `GLM_SERVER_WRITE_TIMEOUT_SECONDS` (default: `180`)
 
 If PocketBase credentials are missing and `GLM_POCKETBASE_ALLOW_UNAUTH=false`, startup/bootstrap will fail fast with a configuration error.
 
@@ -158,6 +185,7 @@ Explicit non-auto `model` values are never overridden.
 State manager supports sticky session context via request `session_id` or `X-Session-ID` header.
 Reasoning pipeline can be enabled per request with `reasoning.mode = "tot"` (or `"auto"`), producing branch/evaluate/synthesis execution with contradiction checks.
 Monte Carlo agent mode is opt-in via `reasoning.mode = "mcts"` and emits `X-GLM-MCTS-*` headers on success; on failures it fail-opens to ToT/direct when enabled.
+Multi-agent mode is opt-in via `reasoning.mode = "multi_agent"` (with `multi_agent_enabled=true`) and emits `X-GLM-MA-*` headers; on failures it fail-opens to MCTS/ToT/direct when enabled.
 Intent preprocessor runs deterministic normalization + ambiguity scoring + intent classification before model execution.
 Document orchestration runs above model execution for multi-document chunking, hierarchical summaries, cross-document linking, and synthesis context injection.
 Memory dynamics adds PB-backed memory nodes with Go-calculated forgetting/freshness/replay scoring for session continuity.
@@ -194,6 +222,15 @@ curl -i -s -X POST http://localhost:8081/v1/chat/completions \
   -H "Authorization: Bearer $ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","reasoning":{"mode":"mcts","mcts_max_rollouts":8,"mcts_max_depth":3,"mcts_exploration":1.2},"messages":[{"role":"user","content":"Compare deployment strategies and choose one"}]}'
+```
+
+Example multi-agent reasoning request:
+
+```bash
+curl -i -s -X POST http://localhost:8081/v1/chat/completions \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","reasoning":{"mode":"multi_agent","multi_agent_enabled":true,"multi_agent_max_agents":4,"multi_agent_max_rounds":2},"messages":[{"role":"user","content":"Compare deployment strategies and choose one"}]}'
 ```
 
 Example deterministic intent preprocessing (ambiguous input):
