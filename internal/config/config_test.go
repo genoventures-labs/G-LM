@@ -248,3 +248,45 @@ func TestLoadMetaReflectionFromEnv(t *testing.T) {
 		t.Fatalf("unexpected trigger values: %#v", cfg.MetaReflectionTriggerDecisions)
 	}
 }
+
+func TestLoadMemoryAnchoredReasoningDefaults(t *testing.T) {
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_ENABLED", "")
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_MAX_ANCHORS", "")
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_MIN_COVERAGE", "")
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_SCORE_BONUS", "")
+
+	cfg := Load()
+	if cfg.MemoryAnchoredReasoningEnabled {
+		t.Fatal("expected memory anchored reasoning disabled by default")
+	}
+	if cfg.MemoryAnchoredReasoningMaxAnchors != 3 {
+		t.Fatalf("expected max anchors default 3, got %d", cfg.MemoryAnchoredReasoningMaxAnchors)
+	}
+	if cfg.MemoryAnchoredReasoningMinCoverage != 0.34 {
+		t.Fatalf("expected min coverage default 0.34, got %f", cfg.MemoryAnchoredReasoningMinCoverage)
+	}
+	if cfg.MemoryAnchoredReasoningScoreBonus != 0.06 {
+		t.Fatalf("expected score bonus default 0.06, got %f", cfg.MemoryAnchoredReasoningScoreBonus)
+	}
+}
+
+func TestLoadMemoryAnchoredReasoningFromEnv(t *testing.T) {
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_ENABLED", "true")
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_MAX_ANCHORS", "5")
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_MIN_COVERAGE", "0.5")
+	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_SCORE_BONUS", "0.1")
+
+	cfg := Load()
+	if !cfg.MemoryAnchoredReasoningEnabled {
+		t.Fatal("expected memory anchored reasoning enabled from env")
+	}
+	if cfg.MemoryAnchoredReasoningMaxAnchors != 5 {
+		t.Fatalf("expected max anchors 5, got %d", cfg.MemoryAnchoredReasoningMaxAnchors)
+	}
+	if cfg.MemoryAnchoredReasoningMinCoverage != 0.5 {
+		t.Fatalf("expected min coverage 0.5, got %f", cfg.MemoryAnchoredReasoningMinCoverage)
+	}
+	if cfg.MemoryAnchoredReasoningScoreBonus != 0.1 {
+		t.Fatalf("expected score bonus 0.1, got %f", cfg.MemoryAnchoredReasoningScoreBonus)
+	}
+}

@@ -70,6 +70,8 @@ func (e *Executor) executeMultiAgent(
 
 	nodes := []Node{}
 	candidates := []agentResult{}
+	anchors := e.resolveMemoryAnchors(req)
+	memAcc := newMemoryAnchorAccumulator(anchors)
 	var pruneAggregate pruneStats
 	tokenBudgetUsed := 0
 	roundsRun := 0
@@ -79,7 +81,7 @@ func (e *Executor) executeMultiAgent(
 		if ctx.Err() != nil {
 			break
 		}
-		roundResults, roundNodes, used, roundErr := e.runMultiAgentRound(ctx, up, req, baseModel, st, roles, round, cfg.BudgetTokens-tokenBudgetUsed, roleMaxTokens)
+		roundResults, roundNodes, used, roundErr := e.runMultiAgentRound(ctx, up, req, baseModel, st, roles, round, cfg.BudgetTokens-tokenBudgetUsed, roleMaxTokens, anchors, &memAcc)
 		nodes = append(nodes, roundNodes...)
 		tokenBudgetUsed += used
 		if roundErr != nil {
@@ -193,7 +195,7 @@ func (e *Executor) executeMultiAgent(
 	if v := e.resolveMultiAgentSynthesisMaxTokens(req); v > 0 {
 		synthReq.MaxTokens = &v
 	}
-	synthReq.Messages = buildMultiAgentSynthesisMessages(req.Messages, synthCandidates[:top], contradictions)
+	synthReq.Messages = buildMultiAgentSynthesisMessages(req.Messages, synthCandidates[:top], contradictions, anchors)
 	finalResp, synthErr := up.ChatCompletions(ctx, synthReq)
 	synthNode.EndedAt = time.Now().UTC()
 	if synthErr != nil {
@@ -202,6 +204,7 @@ func (e *Executor) executeMultiAgent(
 		trace.Nodes = nodes
 		trace.Branches = branchResults
 		trace.Contradictions = contradictions
+		trace.MemoryAnchor = memAcc.Trace(e.cfg.MemoryAnchoredReasoningEnabled, "multi_agent")
 		trace.MultiAgent = &MultiAgentResult{
 			Agents:    len(roles) + 1,
 			Rounds:    maxInt(1, roundsRun),
@@ -226,6 +229,7 @@ func (e *Executor) executeMultiAgent(
 		DroppedLowScore: pruneAggregate.DroppedLowScore,
 		DroppedTopK:     pruneAggregate.DroppedTopK,
 	}
+	trace.MemoryAnchor = memAcc.Trace(e.cfg.MemoryAnchoredReasoningEnabled, "multi_agent")
 	trace.MultiAgent = &MultiAgentResult{
 		Agents:    len(roles) + 1,
 		Rounds:    maxInt(1, roundsRun),
@@ -246,6 +250,8 @@ func (e *Executor) runMultiAgentRound(
 	round int,
 	tokenBudget int,
 	roleMaxTokens int,
+	anchors []string,
+	memAcc *memoryAnchorAccumulator,
 ) ([]agentResult, []Node, int, error) {
 	if tokenBudget <= 0 {
 		return nil, nil, 0, fmt.Errorf("multi-agent budget exhausted")
@@ -278,7 +284,7 @@ func (e *Executor) runMultiAgentRound(
 			if roleMaxTokens > 0 {
 				roleReq.MaxTokens = &roleMaxTokens
 			}
-			roleReq.Messages = buildMultiAgentRoleMessages(req.Messages, role, round)
+			roleReq.Messages = buildMultiAgentRoleMessages(req.Messages, role, round, anchors)
 			resp, err := up.ChatCompletions(ctx, roleReq)
 			node.EndedAt = time.Now().UTC()
 			if err != nil {
@@ -287,7 +293,10 @@ func (e *Executor) runMultiAgentRound(
 				return
 			}
 			output := extractAssistantText(resp)
-			score, _ := e.evaluateOutput(req, output, st, true)
+			score, _, coverage, bonus := e.evaluateOutputWithMemory(req, output, st, true)
+			if memAcc != nil {
+				memAcc.Add(anchors, coverage, bonus)
+			}
 			node.Score = score
 			tokens := estimateTokens(output)
 			outCh <- roundOut{
@@ -431,11 +440,18 @@ func (e *Executor) multiAgentConsensus(results []agentResult) string {
 	return "low"
 }
 
-func buildMultiAgentRoleMessages(base []model.Message, role agentRole, round int) []model.Message {
+func buildMultiAgentRoleMessages(base []model.Message, role agentRole, round int, anchors []string) []model.Message {
 	payload, _ := json.Marshal(map[string]any{
 		"role":  role.Name,
 		"round": round,
 	})
+	if len(anchors) > 0 {
+		payload, _ = json.Marshal(map[string]any{
+			"role":           role.Name,
+			"round":          round,
+			"memory_anchors": anchors,
+		})
+	}
 	sys := model.Message{
 		Role:    "system",
 		Content: "multi_agent role context: " + string(payload) + ". " + role.Prompt,
@@ -446,7 +462,7 @@ func buildMultiAgentRoleMessages(base []model.Message, role agentRole, round int
 	return out
 }
 
-func buildMultiAgentSynthesisMessages(base []model.Message, results []agentResult, contradictions ContradictionReport) []model.Message {
+func buildMultiAgentSynthesisMessages(base []model.Message, results []agentResult, contradictions ContradictionReport, anchors []string) []model.Message {
 	type compact struct {
 		Role   string  `json:"role"`
 		Score  float64 `json:"score"`
@@ -462,6 +478,9 @@ func buildMultiAgentSynthesisMessages(base []model.Message, results []agentResul
 		}(),
 		"contradictions": contradictions,
 		"instruction":    "Synthesize one final answer. Prefer consistency, explicit assumptions, and control/risk clarity.",
+	}
+	if len(anchors) > 0 {
+		payload["memory_anchors"] = anchors
 	}
 	data, _ := json.Marshal(payload)
 	sys := model.Message{
@@ -508,7 +527,7 @@ func (e *Executor) multiAgentBaselineCandidate(
 	if maxTokens > 0 {
 		baselineReq.MaxTokens = &maxTokens
 	}
-	baselineReq.Messages = buildMultiAgentBaselineMessages(req.Messages)
+	baselineReq.Messages = buildMultiAgentBaselineMessages(req.Messages, e.resolveMemoryAnchors(req))
 	resp, err := up.ChatCompletions(ctx, baselineReq)
 	node.EndedAt = time.Now().UTC()
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -520,7 +539,7 @@ func (e *Executor) multiAgentBaselineCandidate(
 		return agentResult{}, node, err
 	}
 	output := extractAssistantText(resp)
-	score, _ := e.evaluateOutput(req, output, st, true)
+	score, _, _, _ := e.evaluateOutputWithMemory(req, output, st, true)
 	node.Score = score
 	return agentResult{
 		Role:   "baseline",
@@ -530,11 +549,15 @@ func (e *Executor) multiAgentBaselineCandidate(
 	}, node, nil
 }
 
-func buildMultiAgentBaselineMessages(base []model.Message) []model.Message {
+func buildMultiAgentBaselineMessages(base []model.Message, anchors []string) []model.Message {
+	anchorHint := ""
+	if len(anchors) > 0 {
+		anchorHint = " Memory anchors (prioritize if relevant): " + strings.Join(anchors, ", ") + "."
+	}
 	sys := model.Message{
 		Role: "system",
 		Content: "multi_agent baseline responder: produce one concise, practical answer with explicit assumptions, " +
-			"controls, and residual risk.",
+			"controls, and residual risk." + anchorHint,
 	}
 	out := make([]model.Message, 0, len(base)+1)
 	out = append(out, sys)

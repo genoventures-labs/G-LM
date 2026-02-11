@@ -389,3 +389,59 @@ func TestMultiAgentPruningNoSurvivorsFallsBackBaseline(t *testing.T) {
 		t.Fatal("expected at least one branch after baseline fallback")
 	}
 }
+
+func TestBuildMultiAgentRoleMessagesIncludesMemoryAnchors(t *testing.T) {
+	msgs := buildMultiAgentRoleMessages(
+		[]model.Message{{Role: "user", Content: "help"}},
+		agentRole{Name: "planner", Prompt: "plan"},
+		1,
+		[]string{"rollout", "incident"},
+	)
+	if len(msgs) == 0 {
+		t.Fatal("expected messages")
+	}
+	if !strings.Contains(msgs[0].Content, "memory_anchors") {
+		t.Fatalf("expected memory anchors in role payload, got %q", msgs[0].Content)
+	}
+}
+
+func TestMultiAgentMemoryAnchorTracePopulated(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                            true,
+		MultiAgentEnabled:                  true,
+		MultiAgentMaxAgents:                4,
+		MultiAgentMaxRounds:                2,
+		MultiAgentBudgetTokens:             1200,
+		MemoryAnchoredReasoningEnabled:     true,
+		MemoryAnchoredReasoningMaxAnchors:  3,
+		MemoryAnchoredReasoningMinCoverage: 0.1,
+		MemoryAnchoredReasoningScoreBonus:  0.06,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:              "multi_agent",
+			MultiAgentEnabled: true,
+		},
+		MemoryAnchorKeys: []string{"safe", "answer"},
+		Messages:         []model.Message{{Role: "user", Content: "provide a plan"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "general"}
+
+	_, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if trace.MemoryAnchor == nil {
+		t.Fatal("expected memory anchor trace")
+	}
+	if !trace.MemoryAnchor.Enabled {
+		t.Fatal("expected memory anchor enabled")
+	}
+	if trace.MemoryAnchor.CandidatesEvaluated < 1 {
+		t.Fatalf("expected candidates evaluated > 0, got %d", trace.MemoryAnchor.CandidatesEvaluated)
+	}
+}

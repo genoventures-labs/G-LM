@@ -311,6 +311,68 @@ func TestEvaluateOutputSelfEvaluateDisabledUsesNeutralScore(t *testing.T) {
 	}
 }
 
+func TestEvaluateOutputMemoryAnchorBonusApplied(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                            true,
+		MemoryAnchoredReasoningEnabled:     true,
+		MemoryAnchoredReasoningMaxAnchors:  3,
+		MemoryAnchoredReasoningMinCoverage: 0.34,
+		MemoryAnchoredReasoningScoreBonus:  0.06,
+		MCTSEnabled:                        true,
+		MCTSDefaultRollouts:                4,
+		MCTSMaxRollouts:                    8,
+		MCTSDefaultDepth:                   2,
+		MCTSMaxDepth:                       3,
+		MCTSDefaultExploration:             1.2,
+	}, r)
+	req := model.ChatCompletionRequest{
+		Reasoning:        &model.ReasoningOptions{SelfEvaluate: true},
+		MemoryAnchorKeys: []string{"rollout", "incident", "controls"},
+	}
+	score, _, coverage, bonus := e.evaluateOutputWithMemory(req, "rollout controls documented", state.CognitiveState{TaskMode: "general"}, false)
+	if coverage < 0.666 {
+		t.Fatalf("expected coverage around 0.667, got %f", coverage)
+	}
+	if bonus <= 0 {
+		t.Fatalf("expected bonus > 0, got %f", bonus)
+	}
+	if score < 0.59 {
+		t.Fatalf("expected anchored score increase, got %f", score)
+	}
+}
+
+func TestEvaluateOutputMemoryAnchorBonusBelowThresholdNotApplied(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                            true,
+		MemoryAnchoredReasoningEnabled:     true,
+		MemoryAnchoredReasoningMaxAnchors:  3,
+		MemoryAnchoredReasoningMinCoverage: 0.9,
+		MemoryAnchoredReasoningScoreBonus:  0.06,
+		MCTSEnabled:                        true,
+		MCTSDefaultRollouts:                4,
+		MCTSMaxRollouts:                    8,
+		MCTSDefaultDepth:                   2,
+		MCTSMaxDepth:                       3,
+		MCTSDefaultExploration:             1.2,
+	}, r)
+	req := model.ChatCompletionRequest{
+		Reasoning:        &model.ReasoningOptions{SelfEvaluate: true},
+		MemoryAnchorKeys: []string{"rollout", "incident", "controls"},
+	}
+	score, _, coverage, bonus := e.evaluateOutputWithMemory(req, "rollout controls documented", state.CognitiveState{TaskMode: "general"}, false)
+	if coverage <= 0 {
+		t.Fatalf("expected non-zero coverage, got %f", coverage)
+	}
+	if bonus != 0 {
+		t.Fatalf("expected zero bonus below threshold, got %f", bonus)
+	}
+	if score != 0.55 {
+		t.Fatalf("expected legacy score unchanged, got %f", score)
+	}
+}
+
 func TestToTSelfEvaluateDisabledUsesNeutralBranchScores(t *testing.T) {
 	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
 	e := NewExecutor(Config{
@@ -386,6 +448,26 @@ func TestNewExecutorSelfEvalCurveInvalidValuesFallback(t *testing.T) {
 	}
 	if e.cfg.SelfEvalCurveHighWeight != 1.08 {
 		t.Fatalf("expected high weight fallback 1.08, got %f", e.cfg.SelfEvalCurveHighWeight)
+	}
+}
+
+func TestNewExecutorMemoryAnchorInvalidValuesClamp(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                            true,
+		MemoryAnchoredReasoningEnabled:     true,
+		MemoryAnchoredReasoningMaxAnchors:  0,
+		MemoryAnchoredReasoningMinCoverage: -1,
+		MemoryAnchoredReasoningScoreBonus:  0.99,
+	}, r)
+	if e.cfg.MemoryAnchoredReasoningMaxAnchors != 3 {
+		t.Fatalf("expected max anchors fallback 3, got %d", e.cfg.MemoryAnchoredReasoningMaxAnchors)
+	}
+	if e.cfg.MemoryAnchoredReasoningMinCoverage != 0 {
+		t.Fatalf("expected min coverage clamp 0, got %f", e.cfg.MemoryAnchoredReasoningMinCoverage)
+	}
+	if e.cfg.MemoryAnchoredReasoningScoreBonus != 0.20 {
+		t.Fatalf("expected score bonus clamp 0.20, got %f", e.cfg.MemoryAnchoredReasoningScoreBonus)
 	}
 }
 

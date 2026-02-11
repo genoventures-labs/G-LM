@@ -1253,6 +1253,109 @@ func TestDirectChatOmitsReasoningPruningHeaders(t *testing.T) {
 	if rr.Header().Get("X-GLM-MCTS-V2") != "" {
 		t.Fatalf("did not expect mcts v2 header on direct chat, got %q", rr.Header().Get("X-GLM-MCTS-V2"))
 	}
+	if rr.Header().Get("X-GLM-Reasoning-Memory-Anchor") != "" {
+		t.Fatalf("did not expect memory anchor header on direct chat, got %q", rr.Header().Get("X-GLM-Reasoning-Memory-Anchor"))
+	}
+}
+
+func TestReasoningMemoryAnchorHeadersDisabled(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"mode": "tot",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "compare options"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Memory-Anchor") != "disabled" {
+		t.Fatalf("expected memory anchor disabled header, got %q", rr.Header().Get("X-GLM-Reasoning-Memory-Anchor"))
+	}
+}
+
+func TestReasoningMemoryAnchorHeadersSkippedNoAnchors(t *testing.T) {
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, nil, func(cfg *config.Config) {
+		cfg.MemoryAnchoredReasoningEnabled = true
+		cfg.MemoryAnchoredReasoningMaxAnchors = 3
+		cfg.MemoryAnchoredReasoningMinCoverage = 0.34
+		cfg.MemoryAnchoredReasoningScoreBonus = 0.06
+	})
+	body := map[string]any{
+		"model":      "mistral:7b",
+		"session_id": "sess-anchor-skip",
+		"reasoning": map[string]any{
+			"mode": "tot",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "compare options"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Memory-Anchor") != "skipped" {
+		t.Fatalf("expected memory anchor skipped header, got %q", rr.Header().Get("X-GLM-Reasoning-Memory-Anchor"))
+	}
+}
+
+func TestReasoningMemoryAnchorHeadersEnabledWithAnchors(t *testing.T) {
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, nil, func(cfg *config.Config) {
+		cfg.MemoryAnchoredReasoningEnabled = true
+		cfg.MemoryAnchoredReasoningMaxAnchors = 3
+		cfg.MemoryAnchoredReasoningMinCoverage = 0.1
+		cfg.MemoryAnchoredReasoningScoreBonus = 0.06
+	})
+	sessionID := "sess-anchor-enabled"
+
+	seedBody := map[string]any{
+		"model":      "mistral:7b",
+		"session_id": sessionID,
+		"messages":   []map[string]string{{"role": "user", "content": "Critical incident rollout controls decision"}},
+	}
+	sb, _ := json.Marshal(seedBody)
+	seedReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(sb))
+	seedReq.Header.Set("Authorization", "Bearer "+runtimeKey)
+	seedRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(seedRR, seedReq)
+	if seedRR.Code != http.StatusOK {
+		t.Fatalf("seed expected 200, got %d: %s", seedRR.Code, seedRR.Body.String())
+	}
+
+	body := map[string]any{
+		"model":      "mistral:7b",
+		"session_id": sessionID,
+		"reasoning": map[string]any{
+			"mode": "tot",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "compare options"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Memory-Anchor") != "enabled" {
+		t.Fatalf("expected memory anchor enabled header, got %q", rr.Header().Get("X-GLM-Reasoning-Memory-Anchor"))
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Memory-Anchors-In") == "" ||
+		rr.Header().Get("X-GLM-Reasoning-Memory-Anchors-Used") == "" ||
+		rr.Header().Get("X-GLM-Reasoning-Memory-Coverage-Avg") == "" ||
+		rr.Header().Get("X-GLM-Reasoning-Memory-Bonus-Avg") == "" {
+		t.Fatal("expected memory anchor aggregate headers")
+	}
 }
 
 func TestCognitionRouteDocumentTask(t *testing.T) {

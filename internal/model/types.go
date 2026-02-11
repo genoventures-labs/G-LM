@@ -11,19 +11,20 @@ type Message struct {
 }
 
 type ChatCompletionRequest struct {
-	Model           string                  `json:"model"`
-	SessionID       string                  `json:"session_id,omitempty"`
-	Reasoning       *ReasoningOptions       `json:"reasoning,omitempty"`
-	SymbolicOverlay *SymbolicOverlayOptions `json:"symbolic_overlay,omitempty"`
-	ResponseStyle   *ResponseStyle          `json:"response_style,omitempty"`
-	Documents       []DocumentInput         `json:"documents,omitempty"`
-	DocumentFlow    *DocumentOrchestration  `json:"document_orchestration,omitempty"`
-	Messages        []Message               `json:"messages"`
-	Tools           []ToolDefinition        `json:"tools,omitempty"`
-	ToolChoice      any                     `json:"tool_choice,omitempty"`
-	Temperature     *float64                `json:"temperature,omitempty"`
-	MaxTokens       *int                    `json:"max_tokens,omitempty"`
-	Stream          bool                    `json:"stream,omitempty"`
+	Model            string                  `json:"model"`
+	SessionID        string                  `json:"session_id,omitempty"`
+	MemoryAnchorKeys []string                `json:"-"`
+	Reasoning        *ReasoningOptions       `json:"reasoning,omitempty"`
+	SymbolicOverlay  *SymbolicOverlayOptions `json:"symbolic_overlay,omitempty"`
+	ResponseStyle    *ResponseStyle          `json:"response_style,omitempty"`
+	Documents        []DocumentInput         `json:"documents,omitempty"`
+	DocumentFlow     *DocumentOrchestration  `json:"document_orchestration,omitempty"`
+	Messages         []Message               `json:"messages"`
+	Tools            []ToolDefinition        `json:"tools,omitempty"`
+	ToolChoice       any                     `json:"tool_choice,omitempty"`
+	Temperature      *float64                `json:"temperature,omitempty"`
+	MaxTokens        *int                    `json:"max_tokens,omitempty"`
+	Stream           bool                    `json:"stream,omitempty"`
 }
 
 type CognitionRequest struct {

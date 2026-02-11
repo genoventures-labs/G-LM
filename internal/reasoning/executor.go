@@ -21,37 +21,41 @@ type Upstream interface {
 }
 
 type Config struct {
-	Enabled                 bool
-	DefaultBranches         int
-	MaxBranches             int
-	PruningEnabled          bool
-	PruningMinScore         float64
-	PruningToTTopK          int
-	PruningToTSynthTopK     int
-	PruningMCTSPoolTopK     int
-	PruningMCTSSynthTopK    int
-	PruningMARoundTopK      int
-	PruningMASynthTopK      int
-	SelfEvalCurveEnabled    bool
-	SelfEvalCurveLowMax     float64
-	SelfEvalCurveMidMax     float64
-	SelfEvalCurveLowWeight  float64
-	SelfEvalCurveMidWeight  float64
-	SelfEvalCurveHighWeight float64
-	SelfEvalCurveBias       float64
-	MCTSEnabled             bool
-	MCTSDefaultRollouts     int
-	MCTSMaxRollouts         int
-	MCTSDefaultDepth        int
-	MCTSMaxDepth            int
-	MCTSDefaultExploration  float64
-	MCTSV2Enabled           bool
-	MCTSEarlyStopWindow     int
-	MCTSEarlyStopDelta      float64
-	MultiAgentEnabled       bool
-	MultiAgentMaxAgents     int
-	MultiAgentMaxRounds     int
-	MultiAgentBudgetTokens  int
+	Enabled                            bool
+	DefaultBranches                    int
+	MaxBranches                        int
+	PruningEnabled                     bool
+	PruningMinScore                    float64
+	PruningToTTopK                     int
+	PruningToTSynthTopK                int
+	PruningMCTSPoolTopK                int
+	PruningMCTSSynthTopK               int
+	PruningMARoundTopK                 int
+	PruningMASynthTopK                 int
+	SelfEvalCurveEnabled               bool
+	SelfEvalCurveLowMax                float64
+	SelfEvalCurveMidMax                float64
+	SelfEvalCurveLowWeight             float64
+	SelfEvalCurveMidWeight             float64
+	SelfEvalCurveHighWeight            float64
+	SelfEvalCurveBias                  float64
+	MCTSEnabled                        bool
+	MCTSDefaultRollouts                int
+	MCTSMaxRollouts                    int
+	MCTSDefaultDepth                   int
+	MCTSMaxDepth                       int
+	MCTSDefaultExploration             float64
+	MCTSV2Enabled                      bool
+	MCTSEarlyStopWindow                int
+	MCTSEarlyStopDelta                 float64
+	MultiAgentEnabled                  bool
+	MultiAgentMaxAgents                int
+	MultiAgentMaxRounds                int
+	MultiAgentBudgetTokens             int
+	MemoryAnchoredReasoningEnabled     bool
+	MemoryAnchoredReasoningMaxAnchors  int
+	MemoryAnchoredReasoningMinCoverage float64
+	MemoryAnchoredReasoningScoreBonus  float64
 }
 
 type Executor struct {
@@ -92,9 +96,62 @@ type Trace struct {
 	Branches       []BranchResult      `json:"branches"`
 	Contradictions ContradictionReport `json:"contradictions"`
 	Pruning        *PruningTrace       `json:"pruning,omitempty"`
+	MemoryAnchor   *MemoryAnchorTrace  `json:"memory_anchor,omitempty"`
 	MCTS           *MCTSResult         `json:"mcts,omitempty"`
 	MultiAgent     *MultiAgentResult   `json:"multi_agent,omitempty"`
 	Nodes          []Node              `json:"nodes"`
+}
+
+type MemoryAnchorTrace struct {
+	Enabled             bool    `json:"enabled"`
+	Applied             bool    `json:"applied"`
+	Mode                string  `json:"mode"`
+	AnchorsIn           int     `json:"anchors_in"`
+	AnchorsUsed         int     `json:"anchors_used"`
+	CandidatesEvaluated int     `json:"candidates_evaluated"`
+	CoverageAvg         float64 `json:"coverage_avg"`
+	BonusAvg            float64 `json:"bonus_avg"`
+}
+
+type memoryAnchorAccumulator struct {
+	anchorsIn   int
+	sumCoverage float64
+	sumBonus    float64
+	candidates  int
+	anchorsUsed map[string]struct{}
+}
+
+func newMemoryAnchorAccumulator(anchors []string) memoryAnchorAccumulator {
+	return memoryAnchorAccumulator{
+		anchorsIn:   len(anchors),
+		anchorsUsed: map[string]struct{}{},
+	}
+}
+
+func (m *memoryAnchorAccumulator) Add(anchors []string, coverage, bonus float64) {
+	m.candidates++
+	m.sumCoverage += coverage
+	m.sumBonus += bonus
+	normalized := normalizeAnchorSet(anchors)
+	for _, a := range normalized {
+		m.anchorsUsed[a] = struct{}{}
+	}
+}
+
+func (m memoryAnchorAccumulator) Trace(enabled bool, mode string) *MemoryAnchorTrace {
+	trace := &MemoryAnchorTrace{
+		Enabled:             enabled,
+		Mode:                mode,
+		AnchorsIn:           m.anchorsIn,
+		AnchorsUsed:         len(m.anchorsUsed),
+		CandidatesEvaluated: m.candidates,
+	}
+	if m.candidates > 0 {
+		trace.CoverageAvg = math.Round((m.sumCoverage/float64(m.candidates))*1000) / 1000
+		trace.BonusAvg = math.Round((m.sumBonus/float64(m.candidates))*1000) / 1000
+	}
+	trace.Applied = enabled && m.anchorsIn > 0 && m.candidates > 0
+	return trace
 }
 
 type PruningTrace struct {
@@ -239,6 +296,21 @@ func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
 	if cfg.MultiAgentBudgetTokens <= 0 {
 		cfg.MultiAgentBudgetTokens = 700
 	}
+	if cfg.MemoryAnchoredReasoningMaxAnchors <= 0 {
+		cfg.MemoryAnchoredReasoningMaxAnchors = 3
+	}
+	if cfg.MemoryAnchoredReasoningMinCoverage < 0 {
+		cfg.MemoryAnchoredReasoningMinCoverage = 0
+	}
+	if cfg.MemoryAnchoredReasoningMinCoverage > 1 {
+		cfg.MemoryAnchoredReasoningMinCoverage = 1
+	}
+	if cfg.MemoryAnchoredReasoningScoreBonus < 0 {
+		cfg.MemoryAnchoredReasoningScoreBonus = 0
+	}
+	if cfg.MemoryAnchoredReasoningScoreBonus > 0.20 {
+		cfg.MemoryAnchoredReasoningScoreBonus = 0.20
+	}
 	return &Executor{cfg: cfg, router: router}
 }
 
@@ -338,6 +410,8 @@ func (e *Executor) executeToT(
 	branches := e.resolveBranches(req)
 	branchResults := make([]BranchResult, 0, branches)
 	allSuccessful := make([]BranchResult, 0, branches)
+	anchors := e.resolveMemoryAnchors(req)
+	memAcc := newMemoryAnchorAccumulator(anchors)
 	var pruneAggregate pruneStats
 	allNodes := make([]Node, 0, branches+4)
 
@@ -345,7 +419,7 @@ func (e *Executor) executeToT(
 		node := Node{ID: fmt.Sprintf("branch-%d", i+1), Type: "branch", Model: baseModel, StartedAt: time.Now().UTC()}
 		branchReq := req
 		branchReq.Model = baseModel
-		branchReq.Messages = buildBranchMessages(req.Messages, i, branches)
+		branchReq.Messages = buildBranchMessages(req.Messages, i, branches, anchors)
 		resp, callErr := up.ChatCompletions(ctx, branchReq)
 		node.EndedAt = time.Now().UTC()
 		if callErr != nil {
@@ -354,7 +428,8 @@ func (e *Executor) executeToT(
 			continue
 		}
 		output := extractAssistantText(resp)
-		score, reason := e.evaluateOutput(req, output, st, false)
+		score, reason, coverage, bonus := e.evaluateOutputWithMemory(req, output, st, false)
+		memAcc.Add(anchors, coverage, bonus)
 		node.Score = score
 		node.Metadata = map[string]any{"evaluation_reason": reason}
 		allNodes = append(allNodes, node)
@@ -421,11 +496,12 @@ func (e *Executor) executeToT(
 		DroppedLowScore: pruneAggregate.DroppedLowScore,
 		DroppedTopK:     pruneAggregate.DroppedTopK,
 	}
+	trace.MemoryAnchor = memAcc.Trace(e.cfg.MemoryAnchoredReasoningEnabled, "tot")
 
 	synthNode := Node{ID: "synthesis-1", Type: "synthesis", Model: baseModel, StartedAt: time.Now().UTC()}
 	synthReq := req
 	synthReq.Model = baseModel
-	synthReq.Messages = buildSynthesisMessages(req.Messages, synthBranches, contradictions)
+	synthReq.Messages = buildSynthesisMessages(req.Messages, synthBranches, contradictions, anchors)
 	finalResp, synthErr := up.ChatCompletions(ctx, synthReq)
 	synthNode.EndedAt = time.Now().UTC()
 	if synthErr != nil {
@@ -562,12 +638,16 @@ func safeMode(req model.ChatCompletionRequest) string {
 	return strings.ToLower(strings.TrimSpace(req.Reasoning.Mode))
 }
 
-func buildBranchMessages(base []model.Message, branchIndex, branchTotal int) []model.Message {
+func buildBranchMessages(base []model.Message, branchIndex, branchTotal int, anchors []string) []model.Message {
 	style := branchPrompt(branchIndex)
+	anchorHint := ""
+	if len(anchors) > 0 {
+		anchorHint = " Memory anchors (prioritize if relevant): " + strings.Join(anchors, ", ") + "."
+	}
 	sys := model.Message{
 		Role: "system",
 		Content: "Reasoning pipeline branch " + strconv.Itoa(branchIndex+1) + "/" + strconv.Itoa(branchTotal) +
-			": produce a complete answer with explicit assumptions and checks. Strategy=" + style,
+			": produce a complete answer with explicit assumptions and checks. Strategy=" + style + "." + anchorHint,
 	}
 	out := make([]model.Message, 0, len(base)+1)
 	out = append(out, sys)
@@ -586,7 +666,7 @@ func branchPrompt(idx int) string {
 	}
 }
 
-func buildSynthesisMessages(base []model.Message, branches []BranchResult, contradictions ContradictionReport) []model.Message {
+func buildSynthesisMessages(base []model.Message, branches []BranchResult, contradictions ContradictionReport, anchors []string) []model.Message {
 	top := branches
 	if len(top) > 3 {
 		top = top[:3]
@@ -594,6 +674,9 @@ func buildSynthesisMessages(base []model.Message, branches []BranchResult, contr
 	payload := map[string]any{
 		"top_branches":   top,
 		"contradictions": contradictions,
+	}
+	if len(anchors) > 0 {
+		payload["memory_anchors"] = anchors
 	}
 	data, _ := json.Marshal(payload)
 	sys := model.Message{
@@ -681,8 +764,13 @@ func extractAssistantText(resp model.ChatCompletionResponse) string {
 }
 
 func (e *Executor) evaluateOutput(req model.ChatCompletionRequest, output string, st state.CognitiveState, applyStatePenalty bool) (float64, string) {
+	score, reason, _, _ := e.evaluateOutputWithMemory(req, output, st, applyStatePenalty)
+	return score, reason
+}
+
+func (e *Executor) evaluateOutputWithMemory(req model.ChatCompletionRequest, output string, st state.CognitiveState, applyStatePenalty bool) (float64, string, float64, float64) {
 	if req.Reasoning != nil && !req.Reasoning.SelfEvaluate {
-		return 0.5, "self_evaluate_disabled"
+		return 0.5, "self_evaluate_disabled", 0, 0
 	}
 
 	score, reason := e.legacySelfEvaluate(output, st)
@@ -693,7 +781,92 @@ func (e *Executor) evaluateOutput(req model.ChatCompletionRequest, output string
 	if applyStatePenalty {
 		score = applyMCTSStatePenalty(score, st)
 	}
-	return score, reason
+	anchors := e.resolveMemoryAnchors(req)
+	coverage := 0.0
+	bonus := 0.0
+	if e.cfg.MemoryAnchoredReasoningEnabled && len(anchors) > 0 {
+		coverage = memoryAnchorCoverage(anchors, output)
+		if coverage >= e.cfg.MemoryAnchoredReasoningMinCoverage {
+			bonus = e.cfg.MemoryAnchoredReasoningScoreBonus * coverage
+			score += bonus
+			if score > 1 {
+				score = 1
+			}
+			score = math.Round(score*1000) / 1000
+		}
+	}
+	return score, reason, coverage, bonus
+}
+
+func (e *Executor) resolveMemoryAnchors(req model.ChatCompletionRequest) []string {
+	if !e.cfg.MemoryAnchoredReasoningEnabled {
+		return nil
+	}
+	anchors := normalizeAnchorSet(req.MemoryAnchorKeys)
+	if len(anchors) == 0 {
+		return nil
+	}
+	limit := e.cfg.MemoryAnchoredReasoningMaxAnchors
+	if limit <= 0 {
+		limit = 3
+	}
+	if len(anchors) > limit {
+		return anchors[:limit]
+	}
+	return anchors
+}
+
+func normalizeAnchorSet(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, raw := range in {
+		v := strings.ToLower(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func memoryAnchorCoverage(anchors []string, output string) float64 {
+	anchors = normalizeAnchorSet(anchors)
+	if len(anchors) == 0 {
+		return 0
+	}
+	toks := tokenizeNormalized(output)
+	if len(toks) == 0 {
+		return 0
+	}
+	matched := 0
+	for _, a := range anchors {
+		if _, ok := toks[a]; ok {
+			matched++
+		}
+	}
+	return math.Round((float64(matched)/float64(len(anchors)))*1000) / 1000
+}
+
+func tokenizeNormalized(s string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, t := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+	}) {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		out[t] = struct{}{}
+	}
+	return out
 }
 
 func (e *Executor) applySelfEvalCurve(score float64) float64 {

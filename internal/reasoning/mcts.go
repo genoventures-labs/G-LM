@@ -68,6 +68,8 @@ func (e *Executor) executeMCTS(
 	candidates := []mctsCandidate{}
 	var pruneAggregate pruneStats
 	successfulRollouts := 0
+	anchors := e.resolveMemoryAnchors(req)
+	memAcc := newMemoryAnchorAccumulator(anchors)
 	maxVisitedDepth := 0
 	var earlyStop bool
 	var earlyStopReason string
@@ -107,7 +109,7 @@ func (e *Executor) executeMCTS(
 
 		simReq := req
 		simReq.Model = baseModel
-		simReq.Messages = buildMCTSMessages(req.Messages, next.Path, st.TaskMode)
+		simReq.Messages = buildMCTSMessages(req.Messages, next.Path, st.TaskMode, anchors)
 		resp, simErr := up.ChatCompletions(ctx, simReq)
 		simNode.EndedAt = time.Now().UTC()
 		if simErr != nil {
@@ -117,7 +119,8 @@ func (e *Executor) executeMCTS(
 		}
 
 		output := extractAssistantText(resp)
-		score, _ := e.evaluateOutput(req, output, st, true)
+		score, _, coverage, bonus := e.evaluateOutputWithMemory(req, output, st, true)
+		memAcc.Add(anchors, coverage, bonus)
 		next.Output = output
 		next.Terminal = next.Depth >= maxDepth
 		simNode.Score = score
@@ -214,10 +217,11 @@ func (e *Executor) executeMCTS(
 
 	synthReq := req
 	synthReq.Model = baseModel
-	synthReq.Messages = buildSynthesisMessages(req.Messages, branchResults, contradictions)
+	synthReq.Messages = buildSynthesisMessages(req.Messages, branchResults, contradictions, anchors)
 	finalResp, synthErr := up.ChatCompletions(ctx, synthReq)
 	if synthErr != nil {
 		trace.Nodes = nodes
+		trace.MemoryAnchor = memAcc.Trace(e.cfg.MemoryAnchoredReasoningEnabled, "mcts")
 		trace.MCTS = &MCTSResult{
 			Rollouts:         rolloutBudget,
 			RolloutsExecuted: maxInt(1, successfulRollouts),
@@ -242,6 +246,7 @@ func (e *Executor) executeMCTS(
 		DroppedLowScore: pruneAggregate.DroppedLowScore,
 		DroppedTopK:     pruneAggregate.DroppedTopK,
 	}
+	trace.MemoryAnchor = memAcc.Trace(e.cfg.MemoryAnchoredReasoningEnabled, "mcts")
 	trace.MCTS = &MCTSResult{
 		Rollouts:         rolloutBudget,
 		RolloutsExecuted: maxInt(1, successfulRollouts),
@@ -354,7 +359,7 @@ func mctsUCBTuned(node *mctsNode, parentVisits float64, exploration float64) flo
 	return mean + u + 0.02*node.Prior
 }
 
-func buildMCTSMessages(base []model.Message, path []string, taskMode string) []model.Message {
+func buildMCTSMessages(base []model.Message, path []string, taskMode string, anchors []string) []model.Message {
 	instruction := "Produce a concise, verifiable answer. Include assumptions and controls."
 	switch strings.ToLower(strings.TrimSpace(taskMode)) {
 	case "coding":
@@ -368,6 +373,13 @@ func buildMCTSMessages(base []model.Message, path []string, taskMode string) []m
 		"path":        path,
 		"instruction": instruction,
 	})
+	if len(anchors) > 0 {
+		payload, _ = json.Marshal(map[string]any{
+			"path":           path,
+			"instruction":    instruction,
+			"memory_anchors": anchors,
+		})
+	}
 	sys := model.Message{
 		Role:    "system",
 		Content: "mcts_agent path context: " + string(payload),
@@ -543,7 +555,7 @@ func (e *Executor) mctsBaselineCandidate(
 	}
 	baselineReq := req
 	baselineReq.Model = modelID
-	baselineReq.Messages = buildMCTSBaselineMessages(req.Messages)
+	baselineReq.Messages = buildMCTSBaselineMessages(req.Messages, e.resolveMemoryAnchors(req))
 	resp, err := up.ChatCompletions(ctx, baselineReq)
 	node.EndedAt = time.Now().UTC()
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -555,7 +567,7 @@ func (e *Executor) mctsBaselineCandidate(
 		return mctsCandidate{}, node, err
 	}
 	output := extractAssistantText(resp)
-	score, _ := e.evaluateOutput(req, output, st, true)
+	score, _, _, _ := e.evaluateOutputWithMemory(req, output, st, true)
 	node.Score = score
 	return mctsCandidate{
 		Path:   nil,
@@ -564,10 +576,14 @@ func (e *Executor) mctsBaselineCandidate(
 	}, node, nil
 }
 
-func buildMCTSBaselineMessages(base []model.Message) []model.Message {
+func buildMCTSBaselineMessages(base []model.Message, anchors []string) []model.Message {
+	anchorHint := ""
+	if len(anchors) > 0 {
+		anchorHint = " Memory anchors (prioritize if relevant): " + strings.Join(anchors, ", ") + "."
+	}
 	sys := model.Message{
 		Role:    "system",
-		Content: "mcts baseline responder: provide a concise, actionable answer with assumptions and controls.",
+		Content: "mcts baseline responder: provide a concise, actionable answer with assumptions and controls." + anchorHint,
 	}
 	out := make([]model.Message, 0, len(base)+1)
 	out = append(out, sys)

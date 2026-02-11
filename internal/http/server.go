@@ -114,37 +114,41 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 		audit:   audit.NewService(st),
 		router:  router,
 		reasoner: reasoning.NewExecutor(reasoning.Config{
-			Enabled:                 cfg.ReasoningPipelineEnabled,
-			DefaultBranches:         cfg.ReasoningPipelineDefaultBranches,
-			MaxBranches:             cfg.ReasoningPipelineMaxBranches,
-			PruningEnabled:          cfg.ReasoningPruningEnabled,
-			PruningMinScore:         cfg.ReasoningPruningMinScore,
-			PruningToTTopK:          cfg.ReasoningPruningToTTopK,
-			PruningToTSynthTopK:     cfg.ReasoningPruningToTSynthTopK,
-			PruningMCTSPoolTopK:     cfg.ReasoningPruningMCTSPoolTopK,
-			PruningMCTSSynthTopK:    cfg.ReasoningPruningMCTSSynthTopK,
-			PruningMARoundTopK:      cfg.ReasoningPruningMARoundTopK,
-			PruningMASynthTopK:      cfg.ReasoningPruningMASynthTopK,
-			SelfEvalCurveEnabled:    cfg.SelfEvalCurveEnabled,
-			SelfEvalCurveLowMax:     cfg.SelfEvalCurveLowMax,
-			SelfEvalCurveMidMax:     cfg.SelfEvalCurveMidMax,
-			SelfEvalCurveLowWeight:  cfg.SelfEvalCurveLowWeight,
-			SelfEvalCurveMidWeight:  cfg.SelfEvalCurveMidWeight,
-			SelfEvalCurveHighWeight: cfg.SelfEvalCurveHighWeight,
-			SelfEvalCurveBias:       cfg.SelfEvalCurveBias,
-			MCTSEnabled:             cfg.MCTSEnabled,
-			MCTSDefaultRollouts:     cfg.MCTSDefaultRollouts,
-			MCTSMaxRollouts:         cfg.MCTSMaxRollouts,
-			MCTSDefaultDepth:        cfg.MCTSDefaultDepth,
-			MCTSMaxDepth:            cfg.MCTSMaxDepth,
-			MCTSDefaultExploration:  cfg.MCTSDefaultExploration,
-			MCTSV2Enabled:           cfg.MCTSV2Enabled,
-			MCTSEarlyStopWindow:     cfg.MCTSEarlyStopWindow,
-			MCTSEarlyStopDelta:      cfg.MCTSEarlyStopDelta,
-			MultiAgentEnabled:       cfg.MultiAgentEnabled,
-			MultiAgentMaxAgents:     cfg.MultiAgentMaxAgents,
-			MultiAgentMaxRounds:     cfg.MultiAgentMaxRounds,
-			MultiAgentBudgetTokens:  cfg.MultiAgentBudgetTokens,
+			Enabled:                            cfg.ReasoningPipelineEnabled,
+			DefaultBranches:                    cfg.ReasoningPipelineDefaultBranches,
+			MaxBranches:                        cfg.ReasoningPipelineMaxBranches,
+			PruningEnabled:                     cfg.ReasoningPruningEnabled,
+			PruningMinScore:                    cfg.ReasoningPruningMinScore,
+			PruningToTTopK:                     cfg.ReasoningPruningToTTopK,
+			PruningToTSynthTopK:                cfg.ReasoningPruningToTSynthTopK,
+			PruningMCTSPoolTopK:                cfg.ReasoningPruningMCTSPoolTopK,
+			PruningMCTSSynthTopK:               cfg.ReasoningPruningMCTSSynthTopK,
+			PruningMARoundTopK:                 cfg.ReasoningPruningMARoundTopK,
+			PruningMASynthTopK:                 cfg.ReasoningPruningMASynthTopK,
+			SelfEvalCurveEnabled:               cfg.SelfEvalCurveEnabled,
+			SelfEvalCurveLowMax:                cfg.SelfEvalCurveLowMax,
+			SelfEvalCurveMidMax:                cfg.SelfEvalCurveMidMax,
+			SelfEvalCurveLowWeight:             cfg.SelfEvalCurveLowWeight,
+			SelfEvalCurveMidWeight:             cfg.SelfEvalCurveMidWeight,
+			SelfEvalCurveHighWeight:            cfg.SelfEvalCurveHighWeight,
+			SelfEvalCurveBias:                  cfg.SelfEvalCurveBias,
+			MCTSEnabled:                        cfg.MCTSEnabled,
+			MCTSDefaultRollouts:                cfg.MCTSDefaultRollouts,
+			MCTSMaxRollouts:                    cfg.MCTSMaxRollouts,
+			MCTSDefaultDepth:                   cfg.MCTSDefaultDepth,
+			MCTSMaxDepth:                       cfg.MCTSMaxDepth,
+			MCTSDefaultExploration:             cfg.MCTSDefaultExploration,
+			MCTSV2Enabled:                      cfg.MCTSV2Enabled,
+			MCTSEarlyStopWindow:                cfg.MCTSEarlyStopWindow,
+			MCTSEarlyStopDelta:                 cfg.MCTSEarlyStopDelta,
+			MultiAgentEnabled:                  cfg.MultiAgentEnabled,
+			MultiAgentMaxAgents:                cfg.MultiAgentMaxAgents,
+			MultiAgentMaxRounds:                cfg.MultiAgentMaxRounds,
+			MultiAgentBudgetTokens:             cfg.MultiAgentBudgetTokens,
+			MemoryAnchoredReasoningEnabled:     cfg.MemoryAnchoredReasoningEnabled,
+			MemoryAnchoredReasoningMaxAnchors:  cfg.MemoryAnchoredReasoningMaxAnchors,
+			MemoryAnchoredReasoningMinCoverage: cfg.MemoryAnchoredReasoningMinCoverage,
+			MemoryAnchoredReasoningScoreBonus:  cfg.MemoryAnchoredReasoningScoreBonus,
 		}, router),
 		docflow: document.New(document.Config{
 			Enabled:           cfg.DocumentOrchestrationEnabled,
@@ -249,7 +253,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.4"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.5"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +522,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		log.Printf("memory dynamics build context failed: %v", merr)
 	} else {
 		req = memReq
+		req.MemoryAnchorKeys = limitAnchorKeys(memRes.Keys, s.cfg.MemoryAnchoredReasoningMaxAnchors)
 		if memRes.Applied {
 			w.Header().Set("X-GLM-Memory-Nodes", strconv.Itoa(memRes.NodeCount))
 			if memRes.ReplayTriggered {
@@ -777,6 +782,20 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-GLM-Reasoning-Prune-In", strconv.Itoa(reasoningTrace.Pruning.CandidatesIn))
 		w.Header().Set("X-GLM-Reasoning-Prune-Out", strconv.Itoa(reasoningTrace.Pruning.CandidatesOut))
 		w.Header().Set("X-GLM-Reasoning-Prune-Dropped", strconv.Itoa(reasoningTrace.Pruning.DroppedLowScore+reasoningTrace.Pruning.DroppedTopK))
+	}
+	if reasoningTrace != nil && reasoningTrace.MemoryAnchor != nil {
+		status := "disabled"
+		if reasoningTrace.MemoryAnchor.Enabled {
+			status = "enabled"
+			if !reasoningTrace.MemoryAnchor.Applied {
+				status = "skipped"
+			}
+		}
+		w.Header().Set("X-GLM-Reasoning-Memory-Anchor", status)
+		w.Header().Set("X-GLM-Reasoning-Memory-Anchors-In", strconv.Itoa(reasoningTrace.MemoryAnchor.AnchorsIn))
+		w.Header().Set("X-GLM-Reasoning-Memory-Anchors-Used", strconv.Itoa(reasoningTrace.MemoryAnchor.AnchorsUsed))
+		w.Header().Set("X-GLM-Reasoning-Memory-Coverage-Avg", formatFloat(reasoningTrace.MemoryAnchor.CoverageAvg))
+		w.Header().Set("X-GLM-Reasoning-Memory-Bonus-Avg", formatFloat(reasoningTrace.MemoryAnchor.BonusAvg))
 	}
 	if err != nil && policyRec.FallbackModel != "" && policyRec.FallbackModel != req.Model {
 		fallbackReq := req
@@ -1529,6 +1548,20 @@ func dedupeStrings(in []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func limitAnchorKeys(in []string, max int) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	if max <= 0 {
+		max = 3
+	}
+	deduped := dedupeStrings(in)
+	if len(deduped) > max {
+		return deduped[:max]
+	}
+	return deduped
 }
 
 func (s *Server) listAvailableModels(ctx context.Context) ([]string, error) {

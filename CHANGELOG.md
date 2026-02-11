@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.5] - 2026-02-11
+
+### Added
+- Memory-anchored reasoning v1 telemetry headers:
+  - `X-GLM-Reasoning-Memory-Anchor`
+  - `X-GLM-Reasoning-Memory-Anchors-In`
+  - `X-GLM-Reasoning-Memory-Anchors-Used`
+  - `X-GLM-Reasoning-Memory-Coverage-Avg`
+  - `X-GLM-Reasoning-Memory-Bonus-Avg`
+- New optional memory-anchored reasoning configuration surface:
+  - `GLM_MEMORY_ANCHORED_REASONING_ENABLED`
+  - `GLM_MEMORY_ANCHORED_REASONING_MAX_ANCHORS`
+  - `GLM_MEMORY_ANCHORED_REASONING_MIN_COVERAGE`
+  - `GLM_MEMORY_ANCHORED_REASONING_SCORE_BONUS`
+
+### Changed
+- Reasoning modes (`tot`, `mcts`, `multi_agent`) can now consume memory anchor keys from memory dynamics as deterministic prompt hints (strict opt-in).
+- Candidate evaluation now supports bounded anchor-coverage score bonus when memory-anchored reasoning is enabled.
+- Reasoning traces now include memory-anchor aggregation metadata (`enabled/applied`, anchor counts, average coverage/bonus).
+- Existing behavior remains fail-open and backward-compatible when memory anchors are unavailable or feature is disabled.
+
 ## [0.1.4] - 2026-02-11
 
 ### Added
@@ -64,6 +85,17 @@ All notable changes to this project are documented in this file.
   - `GLM_META_REFLECTION_ENABLED`
   - `GLM_META_REFLECTION_MAX_PASSES`
   - `GLM_META_REFLECTION_TRIGGER_DECISIONS`
+- New memory-anchored reasoning telemetry headers:
+  - `X-GLM-Reasoning-Memory-Anchor`
+  - `X-GLM-Reasoning-Memory-Anchors-In`
+  - `X-GLM-Reasoning-Memory-Anchors-Used`
+  - `X-GLM-Reasoning-Memory-Coverage-Avg`
+  - `X-GLM-Reasoning-Memory-Bonus-Avg`
+- New optional memory-anchored reasoning configuration surface:
+  - `GLM_MEMORY_ANCHORED_REASONING_ENABLED`
+  - `GLM_MEMORY_ANCHORED_REASONING_MAX_ANCHORS`
+  - `GLM_MEMORY_ANCHORED_REASONING_MIN_COVERAGE`
+  - `GLM_MEMORY_ANCHORED_REASONING_SCORE_BONUS`
 
 ### Changed
 - Reasoning pipelines (`tot`, `mcts`, `multi_agent`) now support tool-calling via a tool-aware upstream wrapper.
@@ -74,6 +106,7 @@ All notable changes to this project are documented in this file.
 - Deterministic graph-pruning heuristics now apply to reasoning modes (`tot`, `mcts`, `multi_agent`) during accumulation and pre-synthesis, with fail-open baseline behavior when pruning removes all candidates.
 - MCTS v2 quality mode adds UCB-tuned selection, task-aware action priors/prompts, and convergence-based early stop while preserving legacy behavior by default.
 - Meta reflection v2 adds a bounded single-pass revise-and-reevaluate loop when meta decisions match configured trigger decisions (`caution,reject` by default), with strict opt-in defaults and fail-open retention of the original response on reflection errors.
+- Memory-anchored reasoning v1 adds deterministic anchor hints to ToT/MCTS/multi-agent prompts and bounded anchor-coverage score bonus, while preserving fail-open legacy behavior when anchors are unavailable or feature is disabled.
 
 ### Fixed
 - Cross-package response schema/test compatibility after expanding assistant message shape with `name` and `tool_calls`.

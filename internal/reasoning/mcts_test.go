@@ -2,6 +2,7 @@ package reasoning
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mike/cognitive-llm/internal/model"
@@ -330,5 +331,64 @@ func TestMCTSV2TraceMetadata(t *testing.T) {
 	}
 	if trace.MCTS.RolloutsExecuted < 1 {
 		t.Fatalf("expected executed rollouts > 0, got %d", trace.MCTS.RolloutsExecuted)
+	}
+}
+
+func TestBuildMCTSMessagesIncludesMemoryAnchors(t *testing.T) {
+	msgs := buildMCTSMessages(
+		[]model.Message{{Role: "user", Content: "help"}},
+		[]string{"plan_first"},
+		"general",
+		[]string{"rollout", "incident"},
+	)
+	if len(msgs) == 0 {
+		t.Fatal("expected messages")
+	}
+	if !strings.Contains(msgs[0].Content, "memory_anchors") {
+		t.Fatalf("expected memory anchors in system payload, got %q", msgs[0].Content)
+	}
+}
+
+func TestMCTSMemoryAnchorTracePopulated(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                            true,
+		MCTSEnabled:                        true,
+		MCTSDefaultRollouts:                4,
+		MCTSMaxRollouts:                    8,
+		MCTSDefaultDepth:                   2,
+		MCTSMaxDepth:                       3,
+		MCTSDefaultExploration:             1.2,
+		MemoryAnchoredReasoningEnabled:     true,
+		MemoryAnchoredReasoningMaxAnchors:  3,
+		MemoryAnchoredReasoningMinCoverage: 0.1,
+		MemoryAnchoredReasoningScoreBonus:  0.06,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:            "mcts",
+			MCTSMaxRollouts: 4,
+			MCTSMaxDepth:    2,
+		},
+		MemoryAnchorKeys: []string{"safe", "answer"},
+		Messages:         []model.Message{{Role: "user", Content: "test"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "general"}
+
+	_, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if trace.MemoryAnchor == nil {
+		t.Fatal("expected memory anchor trace")
+	}
+	if !trace.MemoryAnchor.Enabled {
+		t.Fatal("expected memory anchor enabled")
+	}
+	if trace.MemoryAnchor.CandidatesEvaluated < 1 {
+		t.Fatalf("expected candidates evaluated > 0, got %d", trace.MemoryAnchor.CandidatesEvaluated)
 	}
 }
