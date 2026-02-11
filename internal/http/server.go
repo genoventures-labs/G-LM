@@ -220,7 +220,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v1"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.2"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
