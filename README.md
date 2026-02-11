@@ -98,6 +98,14 @@ If you intentionally run without PocketBase auth, set `GLM_POCKETBASE_ALLOW_UNAU
 - `GLM_REASONING_PIPELINE_ENABLED` (default: `true`)
 - `GLM_REASONING_PIPELINE_DEFAULT_BRANCHES` (default: `3`)
 - `GLM_REASONING_PIPELINE_MAX_BRANCHES` (default: `5`)
+- `GLM_MCTS_ENABLED` (default: `true`)
+- `GLM_MCTS_DEFAULT_ROLLOUTS` (default: `12`)
+- `GLM_MCTS_MAX_ROLLOUTS` (default: `24`)
+- `GLM_MCTS_DEFAULT_DEPTH` (default: `3`)
+- `GLM_MCTS_MAX_DEPTH` (default: `5`)
+- `GLM_MCTS_DEFAULT_EXPLORATION` (default: `1.20`)
+- `GLM_MCTS_STAGE_TIMEOUT_SECONDS` (default: `35`)
+- `GLM_MCTS_FAILOPEN` (default: `true`)
 - `GLM_INTENT_PREPROCESSOR_ENABLED` (default: `true`)
 - `GLM_INTENT_AMBIGUITY_THRESHOLD` (default: `0.62`)
 - `GLM_DOCUMENT_ORCHESTRATION_ENABLED` (default: `true`)
@@ -149,6 +157,7 @@ If PocketBase credentials are missing and `GLM_POCKETBASE_ALLOW_UNAUTH=false`, s
 Explicit non-auto `model` values are never overridden.
 State manager supports sticky session context via request `session_id` or `X-Session-ID` header.
 Reasoning pipeline can be enabled per request with `reasoning.mode = "tot"` (or `"auto"`), producing branch/evaluate/synthesis execution with contradiction checks.
+Monte Carlo agent mode is opt-in via `reasoning.mode = "mcts"` and emits `X-GLM-MCTS-*` headers on success; on failures it fail-opens to ToT/direct when enabled.
 Intent preprocessor runs deterministic normalization + ambiguity scoring + intent classification before model execution.
 Document orchestration runs above model execution for multi-document chunking, hierarchical summaries, cross-document linking, and synthesis context injection.
 Memory dynamics adds PB-backed memory nodes with Go-calculated forgetting/freshness/replay scoring for session continuity.
@@ -176,6 +185,15 @@ curl -s -X POST http://localhost:8081/v1/chat/completions \
   -H "Authorization: Bearer $ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"auto","reasoning":{"mode":"tot","branches":3},"messages":[{"role":"user","content":"Design a safe rollout plan and compare alternatives"}]}'
+```
+
+Example MCTS reasoning request:
+
+```bash
+curl -i -s -X POST http://localhost:8081/v1/chat/completions \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","reasoning":{"mode":"mcts","mcts_max_rollouts":8,"mcts_max_depth":3,"mcts_exploration":1.2},"messages":[{"role":"user","content":"Compare deployment strategies and choose one"}]}'
 ```
 
 Example deterministic intent preprocessing (ambiguous input):

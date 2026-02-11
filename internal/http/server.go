@@ -69,6 +69,9 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream) *Server {
 	if cfg.DocumentStageTimeout <= 0 {
 		cfg.DocumentStageTimeout = 25 * time.Second
 	}
+	if cfg.MCTSStageTimeout <= 0 {
+		cfg.MCTSStageTimeout = 35 * time.Second
+	}
 	router := orchestrator.NewRouter(
 		cfg.OrchestratorDefaultModel,
 		cfg.OrchestratorAliases,
@@ -84,9 +87,15 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream) *Server {
 		audit:   audit.NewService(st),
 		router:  router,
 		reasoner: reasoning.NewExecutor(reasoning.Config{
-			Enabled:         cfg.ReasoningPipelineEnabled,
-			DefaultBranches: cfg.ReasoningPipelineDefaultBranches,
-			MaxBranches:     cfg.ReasoningPipelineMaxBranches,
+			Enabled:                cfg.ReasoningPipelineEnabled,
+			DefaultBranches:        cfg.ReasoningPipelineDefaultBranches,
+			MaxBranches:            cfg.ReasoningPipelineMaxBranches,
+			MCTSEnabled:            cfg.MCTSEnabled,
+			MCTSDefaultRollouts:    cfg.MCTSDefaultRollouts,
+			MCTSMaxRollouts:        cfg.MCTSMaxRollouts,
+			MCTSDefaultDepth:       cfg.MCTSDefaultDepth,
+			MCTSMaxDepth:           cfg.MCTSMaxDepth,
+			MCTSDefaultExploration: cfg.MCTSDefaultExploration,
 		}, router),
 		docflow: document.New(document.Config{
 			Enabled:           cfg.DocumentOrchestrationEnabled,
@@ -393,26 +402,74 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.reasoner.ShouldExecute(req, stateSnapshot) {
 		var trace reasoning.Trace
-		reasonCtx, cancelReason := context.WithTimeout(ctx, s.cfg.ReasoningStageTimeout)
+		reasonMode := ""
+		if req.Reasoning != nil {
+			reasonMode = strings.ToLower(strings.TrimSpace(req.Reasoning.Mode))
+		}
+		reasonCtx, cancelReason := context.WithTimeout(ctx, s.resolveReasoningTimeout(req))
 		resp, trace, err = s.reasoner.Execute(reasonCtx, s.upstream, req, policyRec, stateSnapshot)
 		cancelReason()
 		if err != nil {
 			w.Header().Set("X-GLM-Reasoning-Pipeline", "fallback")
 			w.Header().Set("X-GLM-Reasoning-Error", "true")
-			log.Printf("reasoning pipeline failed, falling back direct: %v", err)
-			resp, err = s.upstream.ChatCompletions(ctx, req)
+			log.Printf("reasoning pipeline failed, evaluating fail-open path: %v", err)
+			if reasonMode == "mcts" && s.cfg.MCTSFailOpen {
+				totReq := req
+				if totReq.Reasoning == nil {
+					totReq.Reasoning = &model.ReasoningOptions{}
+				}
+				totReq.Reasoning.Mode = "tot"
+				totCtx, cancelTot := context.WithTimeout(ctx, s.cfg.ReasoningStageTimeout)
+				resp, trace, err = s.reasoner.ExecuteToT(totCtx, s.upstream, totReq, policyRec, stateSnapshot)
+				cancelTot()
+				if err == nil {
+					reasoningTrace = &trace
+					w.Header().Set("X-GLM-MCTS-Fallback", "tot")
+					outcome = outcome + "|mcts_fallback=tot|pipeline=tot"
+					if trace.ChosenModel != "" {
+						usedModel = trace.ChosenModel
+					}
+				} else {
+					log.Printf("mcts fail-open tot failed, falling back direct: %v", err)
+					directReq := req
+					directReq.Reasoning = nil
+					resp, err = s.upstream.ChatCompletions(ctx, directReq)
+					if err == nil {
+						w.Header().Set("X-GLM-MCTS-Fallback", "direct")
+						outcome = outcome + "|mcts_fallback=direct"
+					}
+				}
+			} else {
+				log.Printf("reasoning pipeline failed, falling back direct: %v", err)
+				resp, err = s.upstream.ChatCompletions(ctx, req)
+			}
 		} else {
 			reasoningTrace = &trace
 			if trace.ChosenModel != "" {
 				usedModel = trace.ChosenModel
 			}
-			w.Header().Set("X-GLM-Reasoning-Pipeline", "tot")
-			w.Header().Set("X-GLM-Reasoning-Branches", strconv.Itoa(len(trace.Branches)))
+			switch strings.ToLower(trace.Mode) {
+			case "mcts":
+				w.Header().Set("X-GLM-Reasoning-Pipeline", "mcts")
+				if trace.MCTS != nil {
+					w.Header().Set("X-GLM-MCTS-Rollouts", strconv.Itoa(trace.MCTS.Rollouts))
+					w.Header().Set("X-GLM-MCTS-Depth", strconv.Itoa(trace.MCTS.Depth))
+					w.Header().Set("X-GLM-MCTS-Best-Score", formatFloat(trace.MCTS.BestScore))
+					outcome = outcome +
+						"|pipeline=mcts" +
+						"|mcts_rollouts=" + strconv.Itoa(trace.MCTS.Rollouts) +
+						"|mcts_depth=" + strconv.Itoa(trace.MCTS.Depth) +
+						"|mcts_best=" + formatFloat(trace.MCTS.BestScore)
+				} else {
+					outcome = outcome + "|pipeline=mcts"
+				}
+			default:
+				w.Header().Set("X-GLM-Reasoning-Pipeline", "tot")
+				w.Header().Set("X-GLM-Reasoning-Branches", strconv.Itoa(len(trace.Branches)))
+				outcome = outcome + "|pipeline=tot"
+			}
 			if trace.Contradictions.Detected {
 				w.Header().Set("X-GLM-Reasoning-Contradictions", "detected")
-			}
-			outcome = outcome + "|pipeline=tot"
-			if trace.Contradictions.Detected {
 				outcome = outcome + "|contradictions=detected"
 			}
 		}
@@ -967,6 +1024,29 @@ func dedupeStrings(in []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func (s *Server) resolveReasoningTimeout(req model.ChatCompletionRequest) time.Duration {
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "mcts") {
+		timeout := s.cfg.MCTSStageTimeout
+		if timeout <= 0 {
+			timeout = 35 * time.Second
+		}
+		if req.Reasoning.MCTSTimeoutMs > 0 {
+			override := time.Duration(req.Reasoning.MCTSTimeoutMs) * time.Millisecond
+			if override < timeout {
+				timeout = override
+			}
+		}
+		if timeout < time.Second {
+			return time.Second
+		}
+		return timeout
+	}
+	if s.cfg.ReasoningStageTimeout <= 0 {
+		return 60 * time.Second
+	}
+	return s.cfg.ReasoningStageTimeout
 }
 
 func safeMetaEvaluate(

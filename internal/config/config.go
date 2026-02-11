@@ -33,6 +33,14 @@ type Config struct {
 	ReasoningPipelineEnabled         bool
 	ReasoningPipelineDefaultBranches int
 	ReasoningPipelineMaxBranches     int
+	MCTSEnabled                      bool
+	MCTSDefaultRollouts              int
+	MCTSMaxRollouts                  int
+	MCTSDefaultDepth                 int
+	MCTSMaxDepth                     int
+	MCTSDefaultExploration           float64
+	MCTSStageTimeout                 time.Duration
+	MCTSFailOpen                     bool
 	IntentPreprocessorEnabled        bool
 	IntentAmbiguityThreshold         float64
 	DocumentOrchestrationEnabled     bool
@@ -89,6 +97,14 @@ func Load() Config {
 		ReasoningPipelineEnabled:         envBool("GLM_REASONING_PIPELINE_ENABLED", true),
 		ReasoningPipelineDefaultBranches: envInt("GLM_REASONING_PIPELINE_DEFAULT_BRANCHES", 3),
 		ReasoningPipelineMaxBranches:     envInt("GLM_REASONING_PIPELINE_MAX_BRANCHES", 5),
+		MCTSEnabled:                      envBool("GLM_MCTS_ENABLED", true),
+		MCTSDefaultRollouts:              envInt("GLM_MCTS_DEFAULT_ROLLOUTS", 12),
+		MCTSMaxRollouts:                  envInt("GLM_MCTS_MAX_ROLLOUTS", 24),
+		MCTSDefaultDepth:                 envInt("GLM_MCTS_DEFAULT_DEPTH", 3),
+		MCTSMaxDepth:                     envInt("GLM_MCTS_MAX_DEPTH", 5),
+		MCTSDefaultExploration:           envFloat("GLM_MCTS_DEFAULT_EXPLORATION", 1.20),
+		MCTSStageTimeout:                 time.Duration(envInt("GLM_MCTS_STAGE_TIMEOUT_SECONDS", 35)) * time.Second,
+		MCTSFailOpen:                     envBool("GLM_MCTS_FAILOPEN", true),
 		IntentPreprocessorEnabled:        envBool("GLM_INTENT_PREPROCESSOR_ENABLED", true),
 		IntentAmbiguityThreshold:         envFloat("GLM_INTENT_AMBIGUITY_THRESHOLD", 0.62),
 		DocumentOrchestrationEnabled:     envBool("GLM_DOCUMENT_ORCHESTRATION_ENABLED", true),

@@ -21,9 +21,15 @@ type Upstream interface {
 }
 
 type Config struct {
-	Enabled         bool
-	DefaultBranches int
-	MaxBranches     int
+	Enabled                bool
+	DefaultBranches        int
+	MaxBranches            int
+	MCTSEnabled            bool
+	MCTSDefaultRollouts    int
+	MCTSMaxRollouts        int
+	MCTSDefaultDepth       int
+	MCTSMaxDepth           int
+	MCTSDefaultExploration float64
 }
 
 type Executor struct {
@@ -63,7 +69,15 @@ type Trace struct {
 	ChosenModel    string              `json:"chosen_model"`
 	Branches       []BranchResult      `json:"branches"`
 	Contradictions ContradictionReport `json:"contradictions"`
+	MCTS           *MCTSResult         `json:"mcts,omitempty"`
 	Nodes          []Node              `json:"nodes"`
+}
+
+type MCTSResult struct {
+	Rollouts  int     `json:"rollouts"`
+	Depth     int     `json:"depth"`
+	BestScore float64 `json:"best_score"`
+	Fallback  string  `json:"fallback,omitempty"`
 }
 
 func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
@@ -72,6 +86,21 @@ func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
 	}
 	if cfg.MaxBranches <= 0 {
 		cfg.MaxBranches = 5
+	}
+	if cfg.MCTSDefaultRollouts <= 0 {
+		cfg.MCTSDefaultRollouts = 12
+	}
+	if cfg.MCTSMaxRollouts <= 0 {
+		cfg.MCTSMaxRollouts = 24
+	}
+	if cfg.MCTSDefaultDepth <= 0 {
+		cfg.MCTSDefaultDepth = 3
+	}
+	if cfg.MCTSMaxDepth <= 0 {
+		cfg.MCTSMaxDepth = 5
+	}
+	if cfg.MCTSDefaultExploration <= 0 {
+		cfg.MCTSDefaultExploration = 1.2
 	}
 	return &Executor{cfg: cfg, router: router}
 }
@@ -87,6 +116,8 @@ func (e *Executor) ShouldExecute(req model.ChatCompletionRequest, st state.Cogni
 	switch mode {
 	case "tot", "pipeline":
 		return true
+	case "mcts":
+		return e.cfg.MCTSEnabled
 	case "auto":
 		return st.TaskMode == "coding" || st.TaskMode == "general"
 	default:
@@ -95,6 +126,29 @@ func (e *Executor) ShouldExecute(req model.ChatCompletionRequest, st state.Cogni
 }
 
 func (e *Executor) Execute(
+	ctx context.Context,
+	up Upstream,
+	req model.ChatCompletionRequest,
+	pol model.ModelPolicy,
+	st state.CognitiveState,
+) (model.ChatCompletionResponse, Trace, error) {
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "mcts") {
+		return e.executeMCTS(ctx, up, req, pol, st)
+	}
+	return e.executeToT(ctx, up, req, pol, st)
+}
+
+func (e *Executor) ExecuteToT(
+	ctx context.Context,
+	up Upstream,
+	req model.ChatCompletionRequest,
+	pol model.ModelPolicy,
+	st state.CognitiveState,
+) (model.ChatCompletionResponse, Trace, error) {
+	return e.executeToT(ctx, up, req, pol, st)
+}
+
+func (e *Executor) executeToT(
 	ctx context.Context,
 	up Upstream,
 	req model.ChatCompletionRequest,

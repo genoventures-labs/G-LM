@@ -68,11 +68,68 @@ func TestExecutorRunsBranchesAndSynthesis(t *testing.T) {
 
 func TestShouldExecute(t *testing.T) {
 	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
-	e := NewExecutor(Config{Enabled: true, DefaultBranches: 3, MaxBranches: 5}, r)
+	e := NewExecutor(Config{
+		Enabled:                true,
+		DefaultBranches:        3,
+		MaxBranches:            5,
+		MCTSEnabled:            true,
+		MCTSDefaultRollouts:    6,
+		MCTSMaxRollouts:        12,
+		MCTSDefaultDepth:       3,
+		MCTSMaxDepth:           5,
+		MCTSDefaultExploration: 1.2,
+	}, r)
 	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "tot"}}, state.CognitiveState{}) {
 		t.Fatal("expected tot mode to execute")
 	}
+	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "mcts"}}, state.CognitiveState{}) {
+		t.Fatal("expected mcts mode to execute when enabled")
+	}
 	if e.ShouldExecute(model.ChatCompletionRequest{}, state.CognitiveState{}) {
 		t.Fatal("expected nil reasoning to skip")
+	}
+}
+
+func TestExecutorMCTSModeProducesTrace(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                true,
+		DefaultBranches:        3,
+		MaxBranches:            5,
+		MCTSEnabled:            true,
+		MCTSDefaultRollouts:    5,
+		MCTSMaxRollouts:        8,
+		MCTSDefaultDepth:       2,
+		MCTSMaxDepth:           3,
+		MCTSDefaultExploration: 1.2,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:            "mcts",
+			MCTSMaxRollouts: 4,
+			MCTSMaxDepth:    2,
+		},
+		Messages: []model.Message{{Role: "user", Content: "Plan a rollout"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "general"}
+
+	resp, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute mcts failed: %v", err)
+	}
+	if trace.Mode != "mcts" {
+		t.Fatalf("expected mcts trace mode, got %q", trace.Mode)
+	}
+	if trace.MCTS == nil {
+		t.Fatal("expected mcts trace payload")
+	}
+	if trace.MCTS.Rollouts < 1 {
+		t.Fatalf("expected positive rollouts, got %d", trace.MCTS.Rollouts)
+	}
+	if resp.Model == "" {
+		t.Fatal("expected response model")
 	}
 }

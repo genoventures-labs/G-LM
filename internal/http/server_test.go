@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,6 +20,9 @@ type fakeUpstream struct {
 	models        []string
 	lastModelUsed string
 	lastRequest   model.ChatCompletionRequest
+	failMCTS      bool
+	failDirect    bool
+	failToT       bool
 }
 
 func (f *fakeUpstream) ListModels(ctx context.Context) (model.ModelListResponse, error) {
@@ -33,6 +37,18 @@ func (f *fakeUpstream) ListModels(ctx context.Context) (model.ModelListResponse,
 }
 
 func (f *fakeUpstream) ChatCompletions(ctx context.Context, req model.ChatCompletionRequest) (model.ChatCompletionResponse, error) {
+	if f.failDirect && (req.Reasoning == nil || req.Reasoning.Mode == "") {
+		return model.ChatCompletionResponse{}, fmt.Errorf("direct failure")
+	}
+	if req.Reasoning != nil {
+		mode := req.Reasoning.Mode
+		if f.failMCTS && mode == "mcts" {
+			return model.ChatCompletionResponse{}, fmt.Errorf("mcts failure")
+		}
+		if f.failToT && (mode == "tot" || mode == "pipeline") {
+			return model.ChatCompletionResponse{}, fmt.Errorf("tot failure")
+		}
+	}
 	f.lastModelUsed = req.Model
 	f.lastRequest = req
 	resp := model.ChatCompletionResponse{Model: req.Model}
@@ -68,6 +84,14 @@ func setupServerWithTenant(t *testing.T) (*Server, string, string, string, *fake
 		ReasoningPipelineEnabled:         true,
 		ReasoningPipelineDefaultBranches: 3,
 		ReasoningPipelineMaxBranches:     5,
+		MCTSEnabled:                      true,
+		MCTSDefaultRollouts:              6,
+		MCTSMaxRollouts:                  12,
+		MCTSDefaultDepth:                 3,
+		MCTSMaxDepth:                     4,
+		MCTSDefaultExploration:           1.2,
+		MCTSStageTimeout:                 10 * time.Second,
+		MCTSFailOpen:                     true,
 		IntentPreprocessorEnabled:        true,
 		IntentAmbiguityThreshold:         0.62,
 		DocumentOrchestrationEnabled:     true,
@@ -439,6 +463,93 @@ func TestReasoningPipelineHeaders(t *testing.T) {
 	}
 }
 
+func TestMCTSReasoningHeaders(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":              "mcts",
+			"mcts_max_rollouts": 4,
+			"mcts_max_depth":    2,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Evaluate rollout options and choose one"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "mcts" {
+		t.Fatalf("expected mcts pipeline header, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
+	}
+	if rr.Header().Get("X-GLM-MCTS-Rollouts") == "" {
+		t.Fatal("expected mcts rollout header")
+	}
+	if rr.Header().Get("X-GLM-MCTS-Depth") == "" {
+		t.Fatal("expected mcts depth header")
+	}
+	if rr.Header().Get("X-GLM-MCTS-Best-Score") == "" {
+		t.Fatal("expected mcts best score header")
+	}
+}
+
+func TestMCTSFailureFallsBackToToT(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	up.failMCTS = true
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":              "mcts",
+			"mcts_max_rollouts": 4,
+			"mcts_max_depth":    2,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Plan deployment safely"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-MCTS-Fallback") != "tot" {
+		t.Fatalf("expected mcts fallback tot, got %q", rr.Header().Get("X-GLM-MCTS-Fallback"))
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Error") != "true" {
+		t.Fatalf("expected reasoning error marker, got %q", rr.Header().Get("X-GLM-Reasoning-Error"))
+	}
+}
+
+func TestMCTSFailureToTFailureFallsBackDirect(t *testing.T) {
+	srv, _, runtimeKey, up := setupServer(t)
+	up.failMCTS = true
+	up.failToT = true
+	body := map[string]any{
+		"model": "auto",
+		"reasoning": map[string]any{
+			"mode":              "mcts",
+			"mcts_max_rollouts": 4,
+			"mcts_max_depth":    2,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Plan deployment safely"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-MCTS-Fallback") != "direct" {
+		t.Fatalf("expected mcts fallback direct, got %q", rr.Header().Get("X-GLM-MCTS-Fallback"))
+	}
+}
+
 func TestIntentPreprocessorHeadersAndRewrite(t *testing.T) {
 	srv, _, runtimeKey, up := setupServer(t)
 	body := map[string]any{
@@ -586,6 +697,30 @@ func TestCognitionRouteDocumentTask(t *testing.T) {
 	}
 	if rr.Header().Get("X-GLM-Document-Orchestration") != "applied" {
 		t.Fatalf("expected doc orchestration applied, got %q", rr.Header().Get("X-GLM-Document-Orchestration"))
+	}
+}
+
+func TestCognitionRouteMCTSReasoning(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"task":  "reasoning",
+		"input": "Compare two options and decide",
+		"reasoning": map[string]any{
+			"mode":              "mcts",
+			"mcts_max_rollouts": 4,
+			"mcts_max_depth":    2,
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/cognition", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "mcts" {
+		t.Fatalf("expected mcts pipeline, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
 	}
 }
 

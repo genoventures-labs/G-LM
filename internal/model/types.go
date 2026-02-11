@@ -36,12 +36,16 @@ type CognitionRequest struct {
 }
 
 type ReasoningOptions struct {
-	Mode                 string `json:"mode,omitempty"`
-	Branches             int    `json:"branches,omitempty"`
-	SelfEvaluate         bool   `json:"self_evaluate,omitempty"`
-	DetectContradictions bool   `json:"detect_contradictions,omitempty"`
-	MetaEnabled          bool   `json:"meta_enabled,omitempty"`
-	MetaProfile          string `json:"meta_profile,omitempty"`
+	Mode                 string  `json:"mode,omitempty"`
+	Branches             int     `json:"branches,omitempty"`
+	SelfEvaluate         bool    `json:"self_evaluate,omitempty"`
+	DetectContradictions bool    `json:"detect_contradictions,omitempty"`
+	MCTSMaxRollouts      int     `json:"mcts_max_rollouts,omitempty"`
+	MCTSMaxDepth         int     `json:"mcts_max_depth,omitempty"`
+	MCTSExploration      float64 `json:"mcts_exploration,omitempty"`
+	MCTSTimeoutMs        int     `json:"mcts_timeout_ms,omitempty"`
+	MetaEnabled          bool    `json:"meta_enabled,omitempty"`
+	MetaProfile          string  `json:"meta_profile,omitempty"`
 }
 
 type DocumentInput struct {

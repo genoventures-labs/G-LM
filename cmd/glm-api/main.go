@@ -586,6 +586,23 @@ func runEvalV2(cfg config.Config, args []string) error {
 			RequireDecisionOneOf: []string{"accept", "caution", "reject"},
 			ExpectBody:           true,
 		},
+		{
+			Name: "mcts-reasoning-pipeline",
+			Payload: map[string]any{
+				"task":       "reasoning",
+				"input":      "Compare rollout options and choose one with brief rationale.",
+				"max_tokens": 96,
+				"reasoning": map[string]any{
+					"mode":              "mcts",
+					"mcts_max_rollouts": 4,
+					"mcts_max_depth":    2,
+					"mcts_exploration":  1.2,
+				},
+			},
+			ExpectHdrs: []string{"X-GLM-Reasoning-Pipeline"},
+			ExpectAny:  map[string][]string{"X-GLM-Reasoning-Pipeline": {"mcts", "fallback"}},
+			ExpectBody: true,
+		},
 	}
 
 	client := &http.Client{Timeout: time.Duration(*timeoutSec) * time.Second}
@@ -651,6 +668,40 @@ func runEvalV2(cfg config.Config, args []string) error {
 			} else {
 				add(tc.Name+".meta_risk_range", true, "value="+v)
 			}
+		}
+		pipeline := strings.ToLower(strings.TrimSpace(resp.Header.Get("X-GLM-Reasoning-Pipeline")))
+		if pipeline == "mcts" {
+			if v := strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Rollouts")); v != "" {
+				if n, err := strconv.Atoi(v); err != nil || n < 1 {
+					add(tc.Name+".mcts_rollouts", false, "value="+v)
+				} else {
+					add(tc.Name+".mcts_rollouts", true, "value="+v)
+				}
+			} else {
+				add(tc.Name+".mcts_rollouts", false, "missing")
+			}
+			if v := strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Depth")); v != "" {
+				if n, err := strconv.Atoi(v); err != nil || n < 1 {
+					add(tc.Name+".mcts_depth", false, "value="+v)
+				} else {
+					add(tc.Name+".mcts_depth", true, "value="+v)
+				}
+			} else {
+				add(tc.Name+".mcts_depth", false, "missing")
+			}
+			if v := strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Best-Score")); v != "" {
+				if f, err := strconv.ParseFloat(v, 64); err != nil || f < 0 || f > 1 {
+					add(tc.Name+".mcts_best_score", false, "value="+v)
+				} else {
+					add(tc.Name+".mcts_best_score", true, "value="+v)
+				}
+			} else {
+				add(tc.Name+".mcts_best_score", false, "missing")
+			}
+		} else if strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Fallback")) != "" {
+			v := strings.TrimSpace(resp.Header.Get("X-GLM-MCTS-Fallback"))
+			ok := strings.EqualFold(v, "tot") || strings.EqualFold(v, "direct")
+			add(tc.Name+".mcts_fallback", ok, "value="+v)
 		}
 
 		if tc.ExpectBody {
