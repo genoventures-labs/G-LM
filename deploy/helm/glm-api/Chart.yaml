@@ -1,0 +1,6 @@
+apiVersion: v2
+name: glm-api
+description: G-LM enterprise gateway service
+type: application
+version: 0.1.0
+appVersion: "v1"

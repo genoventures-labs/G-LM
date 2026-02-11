@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "glm-api.fullname" . }}
+  labels:
+    {{- include "glm-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "glm-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "glm-api.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: glm-api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range $k, $_ := .Values.secretEnv }}
+            - name: {{ $k }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "glm-api.fullname" $ }}-secrets
+                  key: {{ $k }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

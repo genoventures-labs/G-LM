@@ -1,0 +1,51 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/example/glm-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8081
+
+ingress:
+  enabled: false
+  className: ""
+  hosts:
+    - host: glm-api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+env:
+  GLM_SERVER_ADDR: ":8081"
+  GLM_DEFAULT_MODEL: "mistral:7b"
+  GLM_UPSTREAM_TIMEOUT_SECONDS: "40"
+  GLM_UPSTREAM_RETRY_MAX: "2"
+  GLM_RATE_LIMIT_RPM: "120"
+  GLM_AUDIT_RETENTION_DAYS: "90"
+  GLM_REASONING_HIDDEN_DEFAULT: "true"
+
+secretEnv:
+  GLM_UPSTREAM_BASE_URL: "https://your-openwebui.example.com"
+  GLM_UPSTREAM_API_KEY: ""
+  GLM_POCKETBASE_URL: "https://pocketbase.thynaptic.com"
+  GLM_POCKETBASE_AUTH_COLLECTION: "service_accounts"
+  GLM_POCKETBASE_IDENTITY: ""
+  GLM_POCKETBASE_PASSWORD: ""
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70

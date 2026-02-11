@@ -1,0 +1,186 @@
+package model
+
+import "time"
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type ChatCompletionRequest struct {
+	Model         string                 `json:"model"`
+	SessionID     string                 `json:"session_id,omitempty"`
+	Reasoning     *ReasoningOptions      `json:"reasoning,omitempty"`
+	ResponseStyle *ResponseStyle         `json:"response_style,omitempty"`
+	Documents     []DocumentInput        `json:"documents,omitempty"`
+	DocumentFlow  *DocumentOrchestration `json:"document_orchestration,omitempty"`
+	Messages      []Message              `json:"messages"`
+	Temperature   *float64               `json:"temperature,omitempty"`
+	MaxTokens     *int                   `json:"max_tokens,omitempty"`
+	Stream        bool                   `json:"stream,omitempty"`
+}
+
+type CognitionRequest struct {
+	Task          string                 `json:"task,omitempty"`
+	Input         string                 `json:"input,omitempty"`
+	Model         string                 `json:"model,omitempty"`
+	SessionID     string                 `json:"session_id,omitempty"`
+	Messages      []Message              `json:"messages,omitempty"`
+	ResponseStyle *ResponseStyle         `json:"response_style,omitempty"`
+	Documents     []DocumentInput        `json:"documents,omitempty"`
+	Reasoning     *ReasoningOptions      `json:"reasoning,omitempty"`
+	DocumentFlow  *DocumentOrchestration `json:"document_orchestration,omitempty"`
+	Temperature   *float64               `json:"temperature,omitempty"`
+	MaxTokens     *int                   `json:"max_tokens,omitempty"`
+	Stream        bool                   `json:"stream,omitempty"`
+}
+
+type ReasoningOptions struct {
+	Mode                 string `json:"mode,omitempty"`
+	Branches             int    `json:"branches,omitempty"`
+	SelfEvaluate         bool   `json:"self_evaluate,omitempty"`
+	DetectContradictions bool   `json:"detect_contradictions,omitempty"`
+	MetaEnabled          bool   `json:"meta_enabled,omitempty"`
+	MetaProfile          string `json:"meta_profile,omitempty"`
+}
+
+type DocumentInput struct {
+	ID      string `json:"id,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Section string `json:"section,omitempty"`
+	Text    string `json:"text"`
+}
+
+type DocumentOrchestration struct {
+	Mode         string `json:"mode,omitempty"`
+	ChunkSize    int    `json:"chunk_size,omitempty"`
+	MaxDocuments int    `json:"max_documents,omitempty"`
+}
+
+type ResponseStyle struct {
+	BreathingWeight   float64  `json:"breathing_weight,omitempty"`
+	ToneShift         string   `json:"tone_shift,omitempty"`
+	StyleAdjustment   string   `json:"style_adjustment,omitempty"`
+	Pacing            string   `json:"pacing,omitempty"`
+	MicroSwitches     []string `json:"micro_switches,omitempty"`
+	MoodShift         float64  `json:"mood_shift,omitempty"`
+	TopicDrift        float64  `json:"topic_drift,omitempty"`
+	SubtextDetection  string   `json:"subtext_detection,omitempty"`
+	RollingSentiment  float64  `json:"rolling_sentiment,omitempty"`
+	ConversationDrift float64  `json:"conversation_drift,omitempty"`
+	RiskFlags         []string `json:"risk_flags,omitempty"`
+}
+
+type ChatCompletionResponse struct {
+	ID      string `json:"id,omitempty"`
+	Object  string `json:"object,omitempty"`
+	Created int64  `json:"created,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Choices []struct {
+		Index   int `json:"index"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason,omitempty"`
+	} `json:"choices"`
+	Usage any `json:"usage,omitempty"`
+}
+
+type ModelListResponse struct {
+	Object string      `json:"object"`
+	Data   []ModelInfo `json:"data"`
+}
+
+type ModelInfo struct {
+	ID      string `json:"id"`
+	Object  string `json:"object,omitempty"`
+	Created int64  `json:"created,omitempty"`
+	OwnedBy string `json:"owned_by,omitempty"`
+}
+
+type Tenant struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type APIKeyRecord struct {
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id"`
+	Prefix    string    `json:"prefix"`
+	Hash      string    `json:"hash"`
+	Scopes    []string  `json:"scopes"`
+	Status    string    `json:"status"`
+	ExpiresAt *FlexTime `json:"expires_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type Role struct {
+	ID          string    `json:"id"`
+	TenantID    string    `json:"tenant_id"`
+	Name        string    `json:"name"`
+	Permissions []string  `json:"permissions"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type ModelPolicy struct {
+	ID               string    `json:"id"`
+	TenantID         string    `json:"tenant_id"`
+	AllowedModels    []string  `json:"allowed_models"`
+	PrimaryModel     string    `json:"primary_model"`
+	FallbackModel    string    `json:"fallback_model"`
+	ReasoningVisible bool      `json:"reasoning_visible"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type Quota struct {
+	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id"`
+	RPMLimit  int       `json:"rpm_limit"`
+	TPMLimit  int       `json:"tpm_limit"`
+	Burst     int       `json:"burst"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type AuditEvent struct {
+	ID        string   `json:"id"`
+	TenantID  string   `json:"tenant_id"`
+	ActorType string   `json:"actor_type"`
+	ActorID   string   `json:"actor_id"`
+	Endpoint  string   `json:"endpoint"`
+	Model     string   `json:"model"`
+	Outcome   string   `json:"outcome"`
+	LatencyMS int64    `json:"latency_ms"`
+	TraceID   string   `json:"trace_id"`
+	Timestamp FlexTime `json:"timestamp"`
+}
+
+type IdempotencyRecord struct {
+	ID             string    `json:"id"`
+	TenantID       string    `json:"tenant_id"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	RequestHash    string    `json:"request_hash"`
+	ResponseHash   string    `json:"response_hash"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"created_at"`
+	ExpiresAt      FlexTime  `json:"expires_at"`
+}
+
+type MemoryNode struct {
+	ID          string         `json:"id"`
+	TenantID    string         `json:"tenant_id"`
+	SessionID   string         `json:"session_id"`
+	Key         string         `json:"key"`
+	Label       string         `json:"label"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	Weight      float64        `json:"weight"`
+	Importance  float64        `json:"importance"`
+	AccessCount int            `json:"access_count"`
+	LastSeenAt  FlexTime       `json:"last_seen_at"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+}

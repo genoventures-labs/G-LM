@@ -1,0 +1,176 @@
+package config
+
+import (
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Config struct {
+	ServerAddr                       string
+	ServerReadTimeout                time.Duration
+	ServerWriteTimeout               time.Duration
+	ServerIdleTimeout                time.Duration
+	DefaultModel                     string
+	CognitionDefaultModel            string
+	DefaultMaxTokens                 int
+	UpstreamBaseURL                  string
+	UpstreamAPIKey                   string
+	UpstreamTimeout                  time.Duration
+	UpstreamRetryMax                 int
+	PocketBaseURL                    string
+	PocketBaseAuthColl               string
+	PocketBaseIdentity               string
+	PocketBasePassword               string
+	PocketBaseAllowUnauth            bool
+	OrchestratorEnabled              bool
+	OrchestratorDefaultModel         string
+	OrchestratorAliases              []string
+	OrchestratorFallback             string
+	StateHistoryWindow               int
+	EmotionalModulationEnabled       bool
+	ReasoningPipelineEnabled         bool
+	ReasoningPipelineDefaultBranches int
+	ReasoningPipelineMaxBranches     int
+	IntentPreprocessorEnabled        bool
+	IntentAmbiguityThreshold         float64
+	DocumentOrchestrationEnabled     bool
+	DocumentChunkSize                int
+	DocumentMaxDocuments             int
+	DocumentMaxChunksPerDoc          int
+	DocumentMaxLinks                 int
+	MemoryDynamicsEnabled            bool
+	MemoryHalfLifeHours              float64
+	MemoryReplayThreshold            float64
+	MemoryFreshnessWindowHours       float64
+	MemoryContextNodeLimit           int
+	MemoryUpdateConceptsPerTurn      int
+	MemoryOpTimeout                  time.Duration
+	ReasoningStageTimeout            time.Duration
+	DocumentStageTimeout             time.Duration
+	StyleContractEnabled             bool
+	StyleContractVersion             string
+	MetaReasoningEnabled             bool
+	MetaReasoningDefaultProfile      string
+	MetaReasoningAcceptThreshold     float64
+	MetaReasoningStrictThreshold     float64
+	RateLimitRPM                     int
+	AuditRetentionDays               int
+	ReasoningHiddenByDefault         bool
+}
+
+func Load() Config {
+	return Config{
+		ServerAddr:               env("GLM_SERVER_ADDR", ":8081"),
+		ServerReadTimeout:        time.Duration(envInt("GLM_SERVER_READ_TIMEOUT_SECONDS", 20)) * time.Second,
+		ServerWriteTimeout:       time.Duration(envInt("GLM_SERVER_WRITE_TIMEOUT_SECONDS", 180)) * time.Second,
+		ServerIdleTimeout:        time.Duration(envInt("GLM_SERVER_IDLE_TIMEOUT_SECONDS", 120)) * time.Second,
+		DefaultModel:             env("GLM_DEFAULT_MODEL", "mistral:7b"),
+		CognitionDefaultModel:    env("GLM_COGNITION_DEFAULT_MODEL", "llama3.2:1b"),
+		DefaultMaxTokens:         envInt("GLM_DEFAULT_MAX_TOKENS", 128),
+		UpstreamBaseURL:          env("GLM_UPSTREAM_BASE_URL", "http://85.31.233.157:8080"),
+		UpstreamAPIKey:           env("GLM_UPSTREAM_API_KEY", ""),
+		UpstreamTimeout:          time.Duration(envInt("GLM_UPSTREAM_TIMEOUT_SECONDS", 40)) * time.Second,
+		UpstreamRetryMax:         envInt("GLM_UPSTREAM_RETRY_MAX", 2),
+		PocketBaseURL:            env("GLM_POCKETBASE_URL", env("POCKETBASE_URL", "https://pocketbase.thynaptic.com")),
+		PocketBaseAuthColl:       env("GLM_POCKETBASE_AUTH_COLLECTION", "service_accounts"),
+		PocketBaseIdentity:       env("GLM_POCKETBASE_IDENTITY", ""),
+		PocketBasePassword:       env("GLM_POCKETBASE_PASSWORD", ""),
+		PocketBaseAllowUnauth:    envBool("GLM_POCKETBASE_ALLOW_UNAUTH", false),
+		OrchestratorEnabled:      envBool("GLM_ORCHESTRATOR_ENABLED", true),
+		OrchestratorDefaultModel: env("GLM_ORCHESTRATOR_DEFAULT_MODEL", "qwen3-8b-instruct-Q4_K_M"),
+		OrchestratorAliases: splitCSV(
+			env("GLM_ORCHESTRATOR_DEFAULT_ALIASES", "qwen3-8b-instruct-Q4_K_M,qwen3:8b,qwen3-8b,qwen3_8b_instruct_q4_k_m"),
+		),
+		OrchestratorFallback:             env("GLM_ORCHESTRATOR_DEFAULT_FALLBACK", "qwen3:4b"),
+		StateHistoryWindow:               envInt("GLM_STATE_HISTORY_WINDOW", 20),
+		EmotionalModulationEnabled:       envBool("GLM_EMOTIONAL_MODULATION_ENABLED", true),
+		ReasoningPipelineEnabled:         envBool("GLM_REASONING_PIPELINE_ENABLED", true),
+		ReasoningPipelineDefaultBranches: envInt("GLM_REASONING_PIPELINE_DEFAULT_BRANCHES", 3),
+		ReasoningPipelineMaxBranches:     envInt("GLM_REASONING_PIPELINE_MAX_BRANCHES", 5),
+		IntentPreprocessorEnabled:        envBool("GLM_INTENT_PREPROCESSOR_ENABLED", true),
+		IntentAmbiguityThreshold:         envFloat("GLM_INTENT_AMBIGUITY_THRESHOLD", 0.62),
+		DocumentOrchestrationEnabled:     envBool("GLM_DOCUMENT_ORCHESTRATION_ENABLED", true),
+		DocumentChunkSize:                envInt("GLM_DOCUMENT_CHUNK_SIZE", 1200),
+		DocumentMaxDocuments:             envInt("GLM_DOCUMENT_MAX_DOCUMENTS", 8),
+		DocumentMaxChunksPerDoc:          envInt("GLM_DOCUMENT_MAX_CHUNKS_PER_DOC", 8),
+		DocumentMaxLinks:                 envInt("GLM_DOCUMENT_MAX_LINKS", 12),
+		MemoryDynamicsEnabled:            envBool("GLM_MEMORY_DYNAMICS_ENABLED", true),
+		MemoryHalfLifeHours:              envFloat("GLM_MEMORY_HALF_LIFE_HOURS", 168),
+		MemoryReplayThreshold:            envFloat("GLM_MEMORY_REPLAY_THRESHOLD", 0.68),
+		MemoryFreshnessWindowHours:       envFloat("GLM_MEMORY_FRESHNESS_WINDOW_HOURS", 72),
+		MemoryContextNodeLimit:           envInt("GLM_MEMORY_CONTEXT_NODE_LIMIT", 5),
+		MemoryUpdateConceptsPerTurn:      envInt("GLM_MEMORY_UPDATE_CONCEPTS_PER_TURN", 6),
+		MemoryOpTimeout:                  time.Duration(envInt("GLM_MEMORY_OP_TIMEOUT_SECONDS", 2)) * time.Second,
+		ReasoningStageTimeout:            time.Duration(envInt("GLM_REASONING_STAGE_TIMEOUT_SECONDS", 60)) * time.Second,
+		DocumentStageTimeout:             time.Duration(envInt("GLM_DOCUMENT_STAGE_TIMEOUT_SECONDS", 25)) * time.Second,
+		StyleContractEnabled:             envBool("GLM_STYLE_CONTRACT_ENABLED", true),
+		StyleContractVersion:             env("GLM_STYLE_CONTRACT_VERSION", "v1"),
+		MetaReasoningEnabled:             envBool("GLM_META_REASONING_ENABLED", true),
+		MetaReasoningDefaultProfile:      env("GLM_META_REASONING_DEFAULT_PROFILE", "default"),
+		MetaReasoningAcceptThreshold:     envFloat("GLM_META_REASONING_ACCEPT_THRESHOLD", 0.72),
+		MetaReasoningStrictThreshold:     envFloat("GLM_META_REASONING_STRICT_THRESHOLD", 0.82),
+		RateLimitRPM:                     envInt("GLM_RATE_LIMIT_RPM", 120),
+		AuditRetentionDays:               envInt("GLM_AUDIT_RETENTION_DAYS", 90),
+		ReasoningHiddenByDefault:         envBool("GLM_REASONING_HIDDEN_DEFAULT", true),
+	}
+}
+
+func env(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	v := env(key, "")
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func envBool(key string, fallback bool) bool {
+	v := env(key, "")
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
+}
+
+func envFloat(key string, fallback float64) float64 {
+	v := env(key, "")
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
+}
+
+func splitCSV(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}

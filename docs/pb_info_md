@@ -1,0 +1,638 @@
+# G-LM V1 PocketBase Setup — Complete
+
+**Date**: 2026-02-10 04:24 UTC  
+**Status**: ✅ **DEPLOYED**  
+**Base URL**: https://pocketbase.thynaptic.com
+
+---
+
+## Overview
+
+All 9 collections for G-LM V1 have been successfully deployed with proper tenant scoping, API rules, and indexes for performance.
+
+---
+
+## Collections Summary
+
+| Collection | Purpose | Tenant Scoped | Unique Constraints |
+|:---|:---|:---:|:---|
+| **tenants** | Base multi-tenancy | - | - |
+| **projects** | Project organization | ✅ | - |
+| **api_keys** | API authentication | ✅ | - |
+| **roles** | Role definitions | ✅ | - |
+| **memberships** | User-role assignments | ✅ | - |
+| **model_policies** | Model access control | ✅ | tenant_id |
+| **quotas** | Rate limiting | ✅ | tenant_id |
+| **idempotency_records** | Idempotency tracking | ✅ | - |
+| **audit_events** | Audit logging | ✅ | - |
+
+---
+
+## Collection Schemas
+
+### 1. tenants
+
+Base collection for multi-tenancy.
+
+**Fields:**
+- `name` (text, required) — Tenant name
+- `status` (text, required) — Tenant status (default: "active")
+
+**Indexes:**
+- `status`
+
+**API Rules:**
+- List/View: Authenticated users
+- Create/Update/Delete: Commander role only
+
+**Example:**
+```json
+{
+  "name": "Acme Corporation",
+  "status": "active"
+}
+```
+
+---
+
+### 2. projects
+
+Projects within tenants.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required) — Parent tenant
+- `name` (text, required) — Project name
+- `status` (text, required) — Project status
+
+**Indexes:**
+- `tenant_id`, `status`
+
+**API Rules:**
+- List/View: Authenticated users
+- Create/Update: Commander or Operator roles
+- Delete: Commander only
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "name": "Mobile App Project",
+  "status": "active"
+}
+```
+
+---
+
+### 3. api_keys
+
+API key management for authentication.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required) — Parent tenant
+- `prefix` (text, required, indexed) — Key prefix (e.g., "sk_test_")
+- `hash` (text, required, indexed) — Hashed key value
+- `scopes` (json) — Key permissions/scopes
+- `status` (text, required) — Key status ("active"/"revoked")
+- `expires_at` (date, nullable) — Expiration timestamp
+
+**Indexes:**
+- `tenant_id`, `prefix`, `hash`, `status`
+
+**API Rules:**
+- List/View: Authenticated users
+- Create/Update: Commander or Operator roles
+- Delete: Commander only
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "prefix": "sk_live_",
+  "hash": "sha256_hash_here",
+  "scopes": ["read", "write"],
+  "status": "active",
+  "expires_at": "2027-12-31T23:59:59Z"
+}
+```
+
+---
+
+### 4. roles
+
+Role definitions for RBAC.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required) — Parent tenant
+- `name` (text, required) — Role name
+- `permissions` (json) — Role permissions array
+
+**Indexes:**
+- `tenant_id`
+
+**API Rules:**
+- List/View: Authenticated users
+- Create/Update/Delete: Commander role only
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "name": "admin",
+  "permissions": ["read", "write", "delete", "admin"]
+}
+```
+
+---
+
+### 5. memberships
+
+User-to-role assignments.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required) — Parent tenant
+- `principal_id` (text, required) — User/service identifier
+- `role_id` (relation → roles, required) — Assigned role
+
+**Indexes:**
+- `tenant_id`, `principal_id`
+
+**API Rules:**
+- List/View: Authenticated users
+- Create/Update/Delete: Commander role only
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "principal_id": "user_12345",
+  "role_id": "ROLE_ID"
+}
+```
+
+---
+
+### 6. model_policies
+
+Model access control per tenant.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required, **UNIQUE**) — Parent tenant
+- `allowed_models` (json) — List of allowed model names
+- `primary_model` (text, required) — Default model
+- `fallback_model` (text, nullable) — Fallback if primary fails
+- `reasoning_visible` (bool, default: false) — Show model reasoning
+
+**Indexes:**
+- `tenant_id` (unique)
+
+**Unique Constraint**: One policy per tenant
+
+**API Rules:**
+- List/View: Authenticated users
+- Create/Update: Commander or Operator roles
+- Delete: Commander only
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "allowed_models": ["gpt-4", "gpt-3.5-turbo", "claude-3"],
+  "primary_model": "gpt-4",
+  "fallback_model": "gpt-3.5-turbo",
+  "reasoning_visible": false
+}
+```
+
+---
+
+### 7. quotas
+
+Rate limiting configuration per tenant.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required, **UNIQUE**) — Parent tenant
+- `rpm_limit` (number, required) — Requests per minute
+- `tpm_limit` (number, required) — Tokens per minute
+- `burst` (number, required) — Burst allowance
+
+**Indexes:**
+- `tenant_id` (unique)
+
+**Unique Constraint**: One quota per tenant
+
+**API Rules:**
+- List/View: Authenticated users
+- Create/Update/Delete: Commander role only
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "rpm_limit": 60,
+  "tpm_limit": 90000,
+  "burst": 10
+}
+```
+
+---
+
+### 8. idempotency_records
+
+Idempotency key tracking for duplicate request detection.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required) — Parent tenant
+- `idempotency_key` (text, required, indexed) — Client-provided key
+- `request_hash` (text, required) — Hash of request body
+- `response_hash` (text) — Hash of response body
+- `status` (text, required) — Record status
+- `expires_at` (date, required) — Expiration timestamp
+
+**Indexes:**
+- `tenant_id`, `idempotency_key`, `expires_at`
+
+**API Rules:**
+- List/View: Service account only (no public access)
+- Create/Update/Delete: Service account only (no public access)
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Retention**: 90 days (implement cleanup job)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "idempotency_key": "idem_abc123xyz",
+  "request_hash": "sha256_request",
+  "response_hash": "sha256_response",
+  "status": "completed",
+  "expires_at": "2026-05-10T00:00:00Z"
+}
+```
+
+---
+
+### 9. audit_events
+
+Audit logging for all API activity.
+
+**Fields:**
+- `tenant_id` (relation → tenants, required) — Parent tenant
+- `actor_type` (text, required) — Type of actor (user/service/api_key)
+- `actor_id` (text, required, indexed) — Actor identifier
+- `endpoint` (text, required) — API endpoint called
+- `model` (text) — Model used (if applicable)
+- `outcome` (text, required) — Request outcome (success/error)
+- `latency_ms` (number) — Request latency in milliseconds
+- `trace_id` (text, indexed) — Distributed trace ID
+- `timestamp` (date, required, indexed) — Event timestamp
+
+**Indexes:**
+- `tenant_id`, `timestamp`, `actor_id`, `trace_id`
+
+**API Rules:**
+- List/View: Authenticated users (tenant-scoped)
+- Create: Service account only (no public access)
+- Update: Not allowed
+- Delete: Commander only
+
+**Cascade Delete**: ✅ (when tenant is deleted)
+
+**Retention**: 90 days (implement cleanup job)
+
+**Example:**
+```json
+{
+  "tenant_id": "TENANT_ID",
+  "actor_type": "api_key",
+  "actor_id": "sk_live_abc123",
+  "endpoint": "/v1/chat/completions",
+  "model": "gpt-4",
+  "outcome": "success",
+  "latency_ms": 450.5,
+  "trace_id": "trace_xyz789",
+  "timestamp": "2026-02-10T04:24:00Z"
+}
+```
+
+---
+
+## Service Account Setup
+
+### Option 1: Via Admin UI (Recommended)
+
+1. **Login as Admin**
+   - Go to: https://pocketbase.thynaptic.com/_/
+   - Login with admin credentials
+
+2. **Create Service User**
+   - Navigate to Collections → `service_accounts` (recommended auth collection for runtime services)
+   - Click "New record"
+   - Fill in:
+     - Email: `glm-service@internal.local`
+     - Password: (generate strong password)
+     - Role: `operator` (or create dedicated `service` role)
+     - Name: `G-LM Service Account`
+   - Save
+
+3. **Get Service Token**
+   ```bash
+   # Authenticate as service account
+   curl -X POST https://pocketbase.thynaptic.com/api/collections/service_accounts/auth-with-password \
+     -H "Content-Type: application/json" \
+     -d '{
+       "identity": "glm-service@internal.local",
+       "password": "SERVICE_PASSWORD"
+     }'
+   
+   # Response includes token
+   # Store token securely in environment variables
+   ```
+
+4. **Use Service Token**
+   ```bash
+   # All API calls include token
+   curl -H "Authorization: Bearer SERVICE_TOKEN" \
+     https://pocketbase.thynaptic.com/api/collections/tenants/records
+   ```
+
+### Option 2: Use Existing `users` Auth Collection
+
+If you must use `users`, set `GLM_POCKETBASE_AUTH_COLLECTION=users` in service env and keep rules least-privilege.
+
+1. **Create service user in `users`**
+2. **Restrict collection rules to service identity/role**
+3. **Do not use public (`null`) create/update/delete rules**
+
+---
+
+## API Rule Summary
+
+### Current Rules
+
+| Collection | List | View | Create | Update | Delete |
+|:---|:---|:---|:---|:---|:---|
+| tenants | Auth | Auth | Commander | Commander | Commander |
+| projects | Auth | Auth | Cmd/Op | Cmd/Op | Commander |
+| api_keys | Auth | Auth | Cmd/Op | Cmd/Op | Commander |
+| roles | Auth | Auth | Commander | Commander | Commander |
+| memberships | Auth | Auth | Commander | Commander | Commander |
+| model_policies | Auth | Auth | Cmd/Op | Cmd/Op | Commander |
+| quotas | Auth | Auth | Commander | Commander | Commander |
+| idempotency_records | Service-only | Service-only | Service-only | Service-only | Service-only |
+| audit_events | Auth (tenant-scoped) | Auth (tenant-scoped) | Service-only | None | Commander |
+
+**Legend:**
+- Auth = `@request.auth.id != ''`
+- Commander = `@request.auth.role = 'commander'`
+- Cmd/Op = `@request.auth.role = 'commander' || @request.auth.role = 'operator'`
+- Service-only = restricted to service account auth/rules
+- Public = `null` (no restrictions, avoid for control-plane writes)
+
+### Tenant-Scoped Access Pattern
+
+To implement tenant-scoped access (users can only see their tenant's data):
+
+```javascript
+// Example for projects collection
+listRule: "@request.auth.id != '' && tenant_id = @request.auth.tenant_id"
+viewRule: "@request.auth.id != '' && tenant_id = @request.auth.tenant_id"
+```
+
+**Requirements:**
+1. Add `tenant_id` field to `users` collection
+2. Update all collection rules to check tenant_id match
+
+---
+
+## Retention Policy Implementation
+
+### 90-Day Retention for audit_events and idempotency_records
+
+#### Option 1: PocketBase Cron Job (Recommended)
+
+Create a scheduled cleanup script:
+
+```javascript
+// pb_hooks/cleanup.pb.js
+onRecordBeforeCreateRequest((e) => {
+  // Run cleanup every hour
+  if (e.collection.name === "audit_events") {
+    const dao = new Dao(e.httpContext);
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 90);
+    
+    // Delete old audit events
+    dao.db()
+      .newQuery("DELETE FROM audit_events WHERE timestamp < {:cutoff}")
+      .bind({ cutoff: cutoffDate.toISOString() })
+      .execute();
+  }
+});
+```
+
+#### Option 2: External Cron Job
+
+```bash
+#!/bin/bash
+# cleanup-old-records.sh
+
+# Calculate cutoff date (90 days ago)
+CUTOFF_DATE=$(date -d "90 days ago" -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Authenticate as admin
+TOKEN=$(curl -s -X POST https://pocketbase.thynaptic.com/api/admins/auth-with-password \
+  -H "Content-Type: application/json" \
+  -d '{"identity":"admin@email.com","password":"ADMIN_PASSWORD"}' | jq -r '.token')
+
+# Delete old audit events
+curl -X DELETE "https://pocketbase.thynaptic.com/api/collections/audit_events/records" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "filter=timestamp<'$CUTOFF_DATE'"
+
+# Delete old idempotency records
+curl -X DELETE "https://pocketbase.thynaptic.com/api/collections/idempotency_records/records" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "filter=expires_at<'$CUTOFF_DATE'"
+
+echo "✅ Cleanup completed"
+```
+
+Add to crontab:
+```bash
+# Run daily at 2 AM
+0 2 * * * /path/to/cleanup-old-records.sh
+```
+
+#### Option 3: Direct Database Cleanup
+
+```sql
+-- Delete audit events older than 90 days
+DELETE FROM audit_events 
+WHERE timestamp < datetime('now', '-90 days');
+
+-- Delete expired idempotency records
+DELETE FROM idempotency_records 
+WHERE expires_at < datetime('now');
+
+-- Vacuum to reclaim space
+VACUUM;
+```
+
+Schedule via cron:
+```bash
+# Daily cleanup at 2 AM
+0 2 * * * sqlite3 /pb_data/data.db < /path/to/cleanup.sql
+```
+
+---
+
+## Usage Examples
+
+### Creating a Tenant with Full Setup
+
+```typescript
+import PocketBase from 'pocketbase';
+
+const pb = new PocketBase('https://pocketbase.thynaptic.com');
+
+// Authenticate as commander
+await pb.collection('users').authWithPassword('admin@example.com', 'password');
+
+// 1. Create tenant
+const tenant = await pb.collection('tenants').create({
+  name: 'Acme Corp',
+  status: 'active'
+});
+
+// 2. Create model policy
+await pb.collection('model_policies').create({
+  tenant_id: tenant.id,
+  allowed_models: ['gpt-4', 'gpt-3.5-turbo'],
+  primary_model: 'gpt-4',
+  fallback_model: 'gpt-3.5-turbo',
+  reasoning_visible: false
+});
+
+// 3. Create quotas
+await pb.collection('quotas').create({
+  tenant_id: tenant.id,
+  rpm_limit: 60,
+  tpm_limit: 90000,
+  burst: 10
+});
+
+// 4. Create API key
+await pb.collection('api_keys').create({
+  tenant_id: tenant.id,
+  prefix: 'sk_live_',
+  hash: 'hashed_value_here',
+  scopes: ['read', 'write'],
+  status: 'active',
+  expires_at: '2027-12-31T23:59:59Z'
+});
+
+// 5. Create roles
+const adminRole = await pb.collection('roles').create({
+  tenant_id: tenant.id,
+  name: 'admin',
+  permissions: ['read', 'write', 'delete', 'admin']
+});
+
+// 6. Create membership
+await pb.collection('memberships').create({
+  tenant_id: tenant.id,
+  principal_id: 'user_12345',
+  role_id: adminRole.id
+});
+
+console.log('✅ Tenant fully configured');
+```
+
+### Logging Audit Events
+
+```typescript
+// Service logs API call
+await pb.collection('audit_events').create({
+  tenant_id: 'TENANT_ID',
+  actor_type: 'api_key',
+  actor_id: 'sk_live_abc123',
+  endpoint: '/v1/chat/completions',
+  model: 'gpt-4',
+  outcome: 'success',
+  latency_ms: 450,
+  trace_id: 'trace_xyz',
+  timestamp: new Date().toISOString()
+});
+```
+
+### Checking Idempotency
+
+```typescript
+// Check if request was already processed
+const existing = await pb.collection('idempotency_records').getFirstListItem(
+  `idempotency_key='${key}' && tenant_id='${tenantId}'`
+);
+
+if (existing && existing.status === 'completed') {
+  // Return cached response
+  return existing.response_hash;
+}
+
+// Process new request...
+```
+
+---
+
+## Verification
+
+```bash
+# List all G-LM collections
+sqlite3 /pb_data/data.db \
+  "SELECT name FROM _collections WHERE name IN ('tenants', 'projects', 'api_keys', 'roles', 'memberships', 'model_policies', 'quotas', 'idempotency_records', 'audit_events');"
+
+# Count records in each collection
+for coll in tenants projects api_keys roles memberships model_policies quotas idempotency_records audit_events; do
+  echo "$coll: $(curl -s https://pocketbase.thynaptic.com/api/collections/$coll/records | jq '.totalItems')"
+done
+```
+
+---
+
+## Summary
+
+✅ **9 collections created** for G-LM V1  
+✅ **Tenant-scoped architecture** with proper relations  
+✅ **API rules configured** with role-based access  
+✅ **Indexes optimized** for performance  
+✅ **Cascade deletes** configured for data integrity  
+✅ **Retention policy** documented (90 days)  
+✅ **Service account** guidance provided
+
+### Next Steps
+
+1. **Create service account** for G-LM runtime
+2. **Set up tenant-scoped rules** if needed (add tenant_id to users)
+3. **Implement retention cleanup job** (cron or PocketBase hooks)
+4. **Create initial tenant** for testing
+5. **Test API key authentication** flow
+6. **Monitor audit logs** for activity
+
+---
+
+**Base URL**: https://pocketbase.thynaptic.com  
+**Health Check**: https://pocketbase.thynaptic.com/api/health  
+**Admin UI**: https://pocketbase.thynaptic.com/_/
