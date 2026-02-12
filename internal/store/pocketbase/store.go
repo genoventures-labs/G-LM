@@ -420,6 +420,64 @@ func (s *Store) GetModelPolicy(ctx context.Context, tenantID string) (model.Mode
 	return out.Items[0], nil
 }
 
+func (s *Store) UpsertCognitivePolicy(ctx context.Context, policy model.CognitivePolicy) (model.CognitivePolicy, error) {
+	if err := s.requireAnyScope(ctx, "cognitive_policies:write", "cognitive_policies:*"); err != nil {
+		return model.CognitivePolicy{}, err
+	}
+	filter := fmt.Sprintf("tenant_id = '%s'", sanitizeFilter(policy.TenantID))
+	var list listResp[model.CognitivePolicy]
+	if err := s.do(ctx, http.MethodGet, listRecordPath("cognitive_policies", filter, 1), nil, &list); err != nil && !errors.Is(err, errNotFound) {
+		return model.CognitivePolicy{}, err
+	}
+	payload := map[string]any{
+		"tenant_id":                        policy.TenantID,
+		"status":                           policy.Status,
+		"version":                          policy.Version,
+		"allowed_reasoning_modes":          policy.AllowedReasoningModes,
+		"max_reasoning_passes":             policy.MaxReasoningPasses,
+		"max_reflection_passes":            policy.MaxReflectionPasses,
+		"max_self_alignment_passes":        policy.MaxSelfAlignmentPasses,
+		"allow_constraint_breaking":        policy.AllowConstraintBreaking,
+		"max_constraint_breaking_severity": policy.MaxConstraintBreakingSeverity,
+		"allow_adversarial_self_play":      policy.AllowAdversarialSelfPlay,
+		"allow_worldview_fusion":           policy.AllowWorldviewFusion,
+		"allow_shape_transform":            policy.AllowShapeTransform,
+		"allow_skill_compiler":             policy.AllowSkillCompiler,
+		"tool_allowlist":                   policy.ToolAllowlist,
+		"tool_denylist":                    policy.ToolDenylist,
+		"risk_threshold_reject":            policy.RiskThresholdReject,
+		"risk_threshold_warn":              policy.RiskThresholdWarn,
+	}
+	if len(list.Items) == 0 {
+		var out model.CognitivePolicy
+		if err := s.do(ctx, http.MethodPost, createRecordPath("cognitive_policies"), payload, &out); err != nil {
+			return model.CognitivePolicy{}, err
+		}
+		return out, nil
+	}
+	id := list.Items[0].ID
+	var out model.CognitivePolicy
+	if err := s.do(ctx, http.MethodPatch, createRecordPath("cognitive_policies")+"/"+id, payload, &out); err != nil {
+		return model.CognitivePolicy{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) GetCognitivePolicy(ctx context.Context, tenantID string) (model.CognitivePolicy, error) {
+	if err := s.requireAnyScope(ctx, "cognitive_policies:read", "cognitive_policies:*"); err != nil {
+		return model.CognitivePolicy{}, err
+	}
+	filter := fmt.Sprintf("tenant_id = '%s'", sanitizeFilter(tenantID))
+	var out listResp[model.CognitivePolicy]
+	if err := s.do(ctx, http.MethodGet, listRecordPath("cognitive_policies", filter, 1), nil, &out); err != nil {
+		return model.CognitivePolicy{}, err
+	}
+	if len(out.Items) == 0 {
+		return model.CognitivePolicy{}, errNotFound
+	}
+	return out.Items[0], nil
+}
+
 func (s *Store) UpsertQuota(ctx context.Context, quota model.Quota) (model.Quota, error) {
 	if err := s.requireAnyScope(ctx, "quotas:write", "quotas:*"); err != nil {
 		return model.Quota{}, err

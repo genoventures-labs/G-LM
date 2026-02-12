@@ -72,12 +72,14 @@ func (s *Service) Prepare(req model.ChatCompletionRequest, st state.CognitiveSta
 		return req, Result{}, err
 	}
 	return out, Result{
-		Applied:     true,
-		Mode:        norm.Mode,
-		Types:       append([]string{}, norm.Types...),
-		SymbolCount: symbolCount,
-		Artifact:    artifact,
-		Flags:       flags,
+		Applied:       true,
+		Mode:          norm.Mode,
+		SchemaVersion: norm.SchemaVersion,
+		Profile:       norm.OverlayProfile,
+		Types:         append([]string{}, norm.Types...),
+		SymbolCount:   symbolCount,
+		Artifact:      artifact,
+		Flags:         flags,
 	}, nil
 }
 

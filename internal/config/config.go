@@ -126,6 +126,11 @@ type Config struct {
 	MetaReasoningDefaultProfile        string
 	MetaReasoningAcceptThreshold       float64
 	MetaReasoningStrictThreshold       float64
+	ReflectionLayersEnabled            bool
+	ReflectionLayerCount               int
+	EvaluatorChainEnabled              bool
+	EvaluatorChain                     []string
+	EvaluatorChainMaxDepth             int
 	MetaReflectionEnabled              bool
 	MetaReflectionMaxPasses            int
 	MetaReflectionTriggerDecisions     []string
@@ -258,6 +263,11 @@ func Load() Config {
 		MetaReasoningDefaultProfile:        env("GLM_META_REASONING_DEFAULT_PROFILE", "default"),
 		MetaReasoningAcceptThreshold:       envFloat("GLM_META_REASONING_ACCEPT_THRESHOLD", 0.72),
 		MetaReasoningStrictThreshold:       envFloat("GLM_META_REASONING_STRICT_THRESHOLD", 0.82),
+		ReflectionLayersEnabled:            envBool("GLM_REFLECTION_LAYERS_ENABLED", false),
+		ReflectionLayerCount:               envInt("GLM_REFLECTION_LAYER_COUNT", 1),
+		EvaluatorChainEnabled:              envBool("GLM_EVALUATOR_CHAIN_ENABLED", false),
+		EvaluatorChain:                     splitCSV(env("GLM_EVALUATOR_CHAIN", "consistency,risk,policy,factuality,style")),
+		EvaluatorChainMaxDepth:             envInt("GLM_EVALUATOR_CHAIN_MAX_DEPTH", 5),
 		MetaReflectionEnabled:              envBool("GLM_META_REFLECTION_ENABLED", false),
 		MetaReflectionMaxPasses:            envInt("GLM_META_REFLECTION_MAX_PASSES", 1),
 		MetaReflectionTriggerDecisions:     splitCSV(env("GLM_META_REFLECTION_TRIGGER_DECISIONS", "caution,reject")),

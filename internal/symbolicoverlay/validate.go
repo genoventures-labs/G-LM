@@ -22,6 +22,9 @@ var supportedTypes = map[string]struct{}{
 type normalizedOptions struct {
 	Enabled          bool
 	Mode             string
+	SchemaVersion    string
+	OverlayProfile   string
+	MaxOverlayHops   int
 	Types            []string
 	MaxSymbols       int
 	IncludeState     bool
@@ -72,6 +75,32 @@ func normalizeOptions(req model.ChatCompletionRequest, cfg Config) (normalizedOp
 	if opt.MaxSymbols < 0 {
 		return normalizedOptions{}, fmt.Errorf("symbolic_overlay.max_symbols must be >= 0")
 	}
+	if opt.MaxOverlayHops < 0 {
+		return normalizedOptions{}, fmt.Errorf("symbolic_overlay.max_overlay_hops must be >= 0")
+	}
+	schemaVersion := strings.ToLower(strings.TrimSpace(opt.SchemaVersion))
+	if schemaVersion == "" {
+		schemaVersion = "v3"
+	}
+	if schemaVersion != "v3" {
+		return normalizedOptions{}, fmt.Errorf("symbolic_overlay.schema_version must be v3")
+	}
+	profile := strings.ToLower(strings.TrimSpace(opt.OverlayProfile))
+	if profile == "" {
+		profile = "assist"
+	}
+	switch profile {
+	case "assist", "strict", "diagnostic", "fusion_prep":
+	default:
+		return normalizedOptions{}, fmt.Errorf("symbolic_overlay.overlay_profile must be one of: assist, strict, diagnostic, fusion_prep")
+	}
+	maxOverlayHops := opt.MaxOverlayHops
+	if maxOverlayHops <= 0 {
+		maxOverlayHops = 1
+	}
+	if maxOverlayHops > 6 {
+		maxOverlayHops = 6
+	}
 	maxSymbols := cfg.MaxSymbols
 	if opt.MaxSymbols > 0 {
 		maxSymbols = opt.MaxSymbols
@@ -85,6 +114,9 @@ func normalizeOptions(req model.ChatCompletionRequest, cfg Config) (normalizedOp
 	return normalizedOptions{
 		Enabled:          mode != modeOff,
 		Mode:             mode,
+		SchemaVersion:    schemaVersion,
+		OverlayProfile:   profile,
+		MaxOverlayHops:   maxOverlayHops,
 		Types:            types,
 		MaxSymbols:       maxSymbols,
 		IncludeState:     opt.IncludeState,

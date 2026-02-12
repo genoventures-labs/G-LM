@@ -424,3 +424,53 @@ func TestLoadSymbolicSupervisionFromEnv(t *testing.T) {
 		t.Fatalf("expected max passes 0, got %d", cfg.SymbolicSupervisionMaxPasses)
 	}
 }
+
+func TestLoadReflectionLayersDefaults(t *testing.T) {
+	t.Setenv("GLM_REFLECTION_LAYERS_ENABLED", "")
+	t.Setenv("GLM_REFLECTION_LAYER_COUNT", "")
+	t.Setenv("GLM_EVALUATOR_CHAIN_ENABLED", "")
+	t.Setenv("GLM_EVALUATOR_CHAIN", "")
+	t.Setenv("GLM_EVALUATOR_CHAIN_MAX_DEPTH", "")
+
+	cfg := Load()
+	if cfg.ReflectionLayersEnabled {
+		t.Fatal("expected reflection layers disabled by default")
+	}
+	if cfg.ReflectionLayerCount != 1 {
+		t.Fatalf("expected reflection layer count 1, got %d", cfg.ReflectionLayerCount)
+	}
+	if cfg.EvaluatorChainEnabled {
+		t.Fatal("expected evaluator chain disabled by default")
+	}
+	if len(cfg.EvaluatorChain) != 5 {
+		t.Fatalf("expected default evaluator chain length 5, got %d", len(cfg.EvaluatorChain))
+	}
+	if cfg.EvaluatorChainMaxDepth != 5 {
+		t.Fatalf("expected evaluator chain depth 5, got %d", cfg.EvaluatorChainMaxDepth)
+	}
+}
+
+func TestLoadReflectionLayersFromEnv(t *testing.T) {
+	t.Setenv("GLM_REFLECTION_LAYERS_ENABLED", "true")
+	t.Setenv("GLM_REFLECTION_LAYER_COUNT", "3")
+	t.Setenv("GLM_EVALUATOR_CHAIN_ENABLED", "true")
+	t.Setenv("GLM_EVALUATOR_CHAIN", "risk,policy")
+	t.Setenv("GLM_EVALUATOR_CHAIN_MAX_DEPTH", "2")
+
+	cfg := Load()
+	if !cfg.ReflectionLayersEnabled {
+		t.Fatal("expected reflection layers enabled from env")
+	}
+	if cfg.ReflectionLayerCount != 3 {
+		t.Fatalf("expected reflection layer count 3, got %d", cfg.ReflectionLayerCount)
+	}
+	if !cfg.EvaluatorChainEnabled {
+		t.Fatal("expected evaluator chain enabled from env")
+	}
+	if len(cfg.EvaluatorChain) != 2 || cfg.EvaluatorChain[0] != "risk" || cfg.EvaluatorChain[1] != "policy" {
+		t.Fatalf("unexpected evaluator chain: %#v", cfg.EvaluatorChain)
+	}
+	if cfg.EvaluatorChainMaxDepth != 2 {
+		t.Fatalf("expected evaluator chain depth 2, got %d", cfg.EvaluatorChainMaxDepth)
+	}
+}

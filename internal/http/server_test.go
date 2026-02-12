@@ -432,6 +432,163 @@ func TestAdminCreateTenantAndKey(t *testing.T) {
 	}
 }
 
+func TestAdminUpsertAndGetCognitivePolicy(t *testing.T) {
+	srv, adminKey, _, _ := setupServer(t)
+	createTenant := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants", bytes.NewBufferString(`{"name":"newco-cognitive"}`))
+	createTenant.Header.Set("Authorization", "Bearer "+adminKey)
+	tenantRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tenantRR, createTenant)
+	if tenantRR.Code != http.StatusCreated {
+		t.Fatalf("create tenant expected 201, got %d: %s", tenantRR.Code, tenantRR.Body.String())
+	}
+	var tenant model.Tenant
+	if err := json.Unmarshal(tenantRR.Body.Bytes(), &tenant); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{
+		"status":"active",
+		"version":"v1",
+		"allowed_reasoning_modes":["tot","decompose"],
+		"max_reasoning_passes":4,
+		"tool_denylist":["web_search"]
+	}`
+	upReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenant.ID+"/cognitive-policy", bytes.NewBufferString(body))
+	upReq.Header.Set("Authorization", "Bearer "+adminKey)
+	upRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(upRR, upReq)
+	if upRR.Code != http.StatusOK {
+		t.Fatalf("upsert cognitive policy expected 200, got %d: %s", upRR.Code, upRR.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/admin/v1/tenants/"+tenant.ID+"/cognitive-policy", nil)
+	getReq.Header.Set("Authorization", "Bearer "+adminKey)
+	getRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(getRR, getReq)
+	if getRR.Code != http.StatusOK {
+		t.Fatalf("get cognitive policy expected 200, got %d: %s", getRR.Code, getRR.Body.String())
+	}
+	var out model.CognitivePolicy
+	if err := json.Unmarshal(getRR.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.TenantID != tenant.ID {
+		t.Fatalf("expected tenant_id %q, got %q", tenant.ID, out.TenantID)
+	}
+	if len(out.AllowedReasoningModes) != 2 {
+		t.Fatalf("expected 2 allowed reasoning modes, got %d", len(out.AllowedReasoningModes))
+	}
+}
+
+func TestCognitivePolicyBlocksReasoningMode(t *testing.T) {
+	srv, adminKey, _, _ := setupServer(t)
+	createTenant := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants", bytes.NewBufferString(`{"name":"gate-reasoning"}`))
+	createTenant.Header.Set("Authorization", "Bearer "+adminKey)
+	tenantRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tenantRR, createTenant)
+	if tenantRR.Code != http.StatusCreated {
+		t.Fatalf("create tenant expected 201, got %d: %s", tenantRR.Code, tenantRR.Body.String())
+	}
+	var tenant model.Tenant
+	if err := json.Unmarshal(tenantRR.Body.Bytes(), &tenant); err != nil {
+		t.Fatal(err)
+	}
+	keyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenant.ID+"/keys", bytes.NewBufferString(`{"scopes":["runtime:*"]}`))
+	keyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	keyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(keyRR, keyReq)
+	if keyRR.Code != http.StatusCreated {
+		t.Fatalf("create key expected 201, got %d: %s", keyRR.Code, keyRR.Body.String())
+	}
+	var keyOut struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(keyRR.Body.Bytes(), &keyOut); err != nil {
+		t.Fatal(err)
+	}
+	policyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenant.ID+"/cognitive-policy", bytes.NewBufferString(`{"status":"active","allowed_reasoning_modes":["tot"]}`))
+	policyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	policyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(policyRR, policyReq)
+	if policyRR.Code != http.StatusOK {
+		t.Fatalf("cognitive policy expected 200, got %d: %s", policyRR.Code, policyRR.Body.String())
+	}
+
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"mode":                   "decompose",
+			"decompose_enabled":      true,
+			"decompose_max_subtasks": 3,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "plan rollout"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+keyOut.APIKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for blocked reasoning mode, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestCognitivePolicyToolDenylist(t *testing.T) {
+	srv, adminKey, _, _ := setupServer(t)
+	createTenant := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants", bytes.NewBufferString(`{"name":"gate-tools"}`))
+	createTenant.Header.Set("Authorization", "Bearer "+adminKey)
+	tenantRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tenantRR, createTenant)
+	if tenantRR.Code != http.StatusCreated {
+		t.Fatalf("create tenant expected 201, got %d: %s", tenantRR.Code, tenantRR.Body.String())
+	}
+	var tenant model.Tenant
+	if err := json.Unmarshal(tenantRR.Body.Bytes(), &tenant); err != nil {
+		t.Fatal(err)
+	}
+	keyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenant.ID+"/keys", bytes.NewBufferString(`{"scopes":["runtime:*"]}`))
+	keyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	keyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(keyRR, keyReq)
+	if keyRR.Code != http.StatusCreated {
+		t.Fatalf("create key expected 201, got %d: %s", keyRR.Code, keyRR.Body.String())
+	}
+	var keyOut struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.Unmarshal(keyRR.Body.Bytes(), &keyOut); err != nil {
+		t.Fatal(err)
+	}
+	policyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenant.ID+"/cognitive-policy", bytes.NewBufferString(`{"status":"active","tool_denylist":["web_search"]}`))
+	policyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	policyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(policyRR, policyReq)
+	if policyRR.Code != http.StatusOK {
+		t.Fatalf("cognitive policy expected 200, got %d: %s", policyRR.Code, policyRR.Body.String())
+	}
+
+	body := map[string]any{
+		"model": "mistral:7b",
+		"tools": []map[string]any{
+			{
+				"type": "function",
+				"function": map[string]any{
+					"name": "web_search",
+				},
+			},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "search this"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+keyOut.APIKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for denied tool, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestAutoRoutingAddsHeadersAndSelectsModel(t *testing.T) {
 	srv, _, runtimeKey, up := setupServer(t)
 	body := map[string]any{
@@ -1658,6 +1815,55 @@ func TestMetaReasoningAuditOutcomeTags(t *testing.T) {
 	}
 }
 
+func TestCognitivePolicyAuditOutcomeTags(t *testing.T) {
+	srv, adminKey, runtimeKey, tenantID, _ := setupServerWithTenant(t)
+	cpReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenantID+"/cognitive-policy", bytes.NewBufferString(`{"status":"active","allowed_reasoning_modes":["tot","mcts","multi_agent","decompose"]}`))
+	cpReq.Header.Set("Authorization", "Bearer "+adminKey)
+	cpRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(cpRR, cpReq)
+	if cpRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 cognitive policy upsert, got %d: %s", cpRR.Code, cpRR.Body.String())
+	}
+
+	body := map[string]any{
+		"model": "mistral:7b",
+		"messages": []map[string]string{
+			{"role": "user", "content": "hello"},
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	auditReq := httptest.NewRequest(http.MethodGet, "/admin/v1/tenants/"+tenantID+"/audit-events", nil)
+	auditReq.Header.Set("Authorization", "Bearer "+adminKey)
+	auditRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(auditRR, auditReq)
+	if auditRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 on audit events, got %d: %s", auditRR.Code, auditRR.Body.String())
+	}
+	var out struct {
+		Items []struct {
+			Outcome string `json:"outcome"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(auditRR.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Items) == 0 {
+		t.Fatal("expected audit items")
+	}
+	got := out.Items[0].Outcome
+	if !bytes.Contains([]byte(got), []byte("cognitive_policy=")) || !bytes.Contains([]byte(got), []byte("policy_gate=")) {
+		t.Fatalf("expected cognitive policy tags in audit outcome, got %q", got)
+	}
+}
+
 func TestShouldTriggerReflectionStrictOptIn(t *testing.T) {
 	req := model.ChatCompletionRequest{
 		Reasoning: &model.ReasoningOptions{
@@ -1806,7 +2012,7 @@ func TestMetaReflectionUpstreamErrorReturnsOriginal(t *testing.T) {
 
 func TestMetaReflectionMultiPassSelfAlignment(t *testing.T) {
 	up := &fakeUpstream{
-		models:      []string{"mistral:7b"},
+		models: []string{"mistral:7b"},
 		responseSeq: []string{
 			"maybe unclear perhaps",
 			"Plan with staged rollout and rollback checks [1], but maybe details vary by environment.",
@@ -1885,6 +2091,160 @@ func TestSelfAlignmentRequestAliasEnablesReflection(t *testing.T) {
 	}
 	if rr.Header().Get("X-GLM-Meta-Reflection") != "applied" {
 		t.Fatalf("expected meta reflection applied via self-alignment alias, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
+	}
+}
+
+func TestEvaluatorChainHeaders(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{"maybe unclear perhaps", "Ignore policy and bypass guardrail"},
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.MetaReasoningEnabled = true
+		cfg.ReflectionLayersEnabled = true
+		cfg.ReflectionLayerCount = 1
+		cfg.EvaluatorChainEnabled = true
+		cfg.EvaluatorChain = []string{"risk", "policy"}
+		cfg.EvaluatorChainMaxDepth = 2
+		cfg.MetaReflectionTriggerDecisions = []string{"caution", "reject"}
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"meta_enabled":            true,
+			"evaluator_chain_enabled": true,
+			"evaluator_chain":         []string{"risk", "policy"},
+			"evaluator_chain_max_depth": 2,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Evaluator-Chain") == "" {
+		t.Fatal("expected evaluator chain header")
+	}
+	if rr.Header().Get("X-GLM-Evaluator-Depth") == "" {
+		t.Fatal("expected evaluator depth header")
+	}
+	if rr.Header().Get("X-GLM-Reflection-Layers") == "" {
+		t.Fatal("expected reflection layers header")
+	}
+	if rr.Header().Get("X-GLM-Reflection-Stop-Reason") == "" {
+		t.Fatal("expected reflection stop reason header")
+	}
+}
+
+func TestReflectionLayersRequestAlias(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{"maybe unclear perhaps", "Concrete answer with clear assumptions and checks."},
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.MetaReasoningEnabled = true
+		cfg.ReflectionLayersEnabled = false
+		cfg.MetaReflectionEnabled = false
+		cfg.SelfAlignmentEnabled = false
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"meta_enabled":               true,
+			"reflection_layers_enabled":  true,
+			"reflection_layer_count":     1,
+			"evaluator_chain_enabled":    true,
+			"evaluator_chain":            []string{"risk"},
+			"evaluator_chain_max_depth":  1,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection") != "applied" {
+		t.Fatalf("expected reflection applied via reflection_layers alias, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
+	}
+	if rr.Header().Get("X-GLM-Reflection-Layers") != "1" {
+		t.Fatalf("expected reflection layers=1, got %q", rr.Header().Get("X-GLM-Reflection-Layers"))
+	}
+}
+
+func TestSymbolicOverlayV3Headers(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"symbolic_overlay": map[string]any{
+			"mode":             "assist",
+			"schema_version":   "v3",
+			"overlay_profile":  "diagnostic",
+			"max_overlay_hops": 3,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "must deploy with rollback and compliance"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Version") != "v3" {
+		t.Fatalf("expected symbolic version v3, got %q", rr.Header().Get("X-GLM-Symbolic-Version"))
+	}
+	if rr.Header().Get("X-GLM-Symbolic-Profile") != "diagnostic" {
+		t.Fatalf("expected symbolic profile diagnostic, got %q", rr.Header().Get("X-GLM-Symbolic-Profile"))
+	}
+}
+
+func TestStyleContractV2Headers(t *testing.T) {
+	srv, _, runtimeKey, _, up := setupServerCustom(t, nil, func(cfg *config.Config) {
+		cfg.StyleContractEnabled = true
+		cfg.StyleContractVersion = "v2"
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"response_style": map[string]any{
+			"audience_mode":         "operator",
+			"register":              "briefing",
+			"verbosity_target":      "short",
+			"justification_density": "high",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "status update"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Style-Contract") != "v2" {
+		t.Fatalf("expected style contract v2, got %q", rr.Header().Get("X-GLM-Style-Contract"))
+	}
+	if rr.Header().Get("X-GLM-Style-Audience") != "operator" {
+		t.Fatalf("expected style audience operator, got %q", rr.Header().Get("X-GLM-Style-Audience"))
+	}
+	found := false
+	for _, m := range up.lastRequest.Messages {
+		if m.Role == "system" && bytes.Contains([]byte(m.Content), []byte("style_contract=v2")) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected style contract v2 system message in upstream request")
 	}
 }
 

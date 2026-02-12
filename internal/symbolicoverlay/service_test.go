@@ -36,6 +36,21 @@ func TestValidateRequestRejectsBadMode(t *testing.T) {
 	}
 }
 
+func TestValidateRequestAcceptsV3ProfileAndHops(t *testing.T) {
+	svc := New(Config{Enabled: true, MaxSymbols: 48, MaxDocChars: 12000, StrictChecks: true})
+	req := model.ChatCompletionRequest{
+		SymbolicOverlay: &model.SymbolicOverlayOptions{
+			Mode:           "assist",
+			SchemaVersion:  "v3",
+			OverlayProfile: "diagnostic",
+			MaxOverlayHops: 3,
+		},
+	}
+	if err := svc.ValidateRequest(req); err != nil {
+		t.Fatalf("expected valid v3 symbolic options, got %v", err)
+	}
+}
+
 func TestCheckCompliance(t *testing.T) {
 	svc := New(Config{Enabled: true, MaxSymbols: 48, MaxDocChars: 12000, StrictChecks: true})
 	res, err := svc.CheckCompliance(model.ChatCompletionRequest{}, model.ChatCompletionResponse{

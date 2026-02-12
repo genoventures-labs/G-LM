@@ -37,20 +37,25 @@ type RiskLens struct {
 }
 
 type OverlayArtifact struct {
-	Mode          string        `json:"mode"`
-	Types         []string      `json:"types"`
-	LogicMap      LogicMap      `json:"logic_map,omitempty"`
-	ConstraintSet ConstraintSet `json:"constraint_set,omitempty"`
-	RiskLens      RiskLens      `json:"risk_lens,omitempty"`
+	SchemaVersion  string        `json:"schema_version,omitempty"`
+	Profile        string        `json:"profile,omitempty"`
+	MaxOverlayHops int           `json:"max_overlay_hops,omitempty"`
+	Mode           string        `json:"mode"`
+	Types          []string      `json:"types"`
+	LogicMap       LogicMap      `json:"logic_map,omitempty"`
+	ConstraintSet  ConstraintSet `json:"constraint_set,omitempty"`
+	RiskLens       RiskLens      `json:"risk_lens,omitempty"`
 }
 
 type Result struct {
-	Applied     bool            `json:"applied"`
-	Mode        string          `json:"mode,omitempty"`
-	Types       []string        `json:"types,omitempty"`
-	SymbolCount int             `json:"symbol_count,omitempty"`
-	Artifact    OverlayArtifact `json:"artifact,omitempty"`
-	Flags       []string        `json:"flags,omitempty"`
+	Applied       bool            `json:"applied"`
+	Mode          string          `json:"mode,omitempty"`
+	SchemaVersion string          `json:"schema_version,omitempty"`
+	Profile       string          `json:"profile,omitempty"`
+	Types         []string        `json:"types,omitempty"`
+	SymbolCount   int             `json:"symbol_count,omitempty"`
+	Artifact      OverlayArtifact `json:"artifact,omitempty"`
+	Flags         []string        `json:"flags,omitempty"`
 }
 
 type ComplianceResult struct {

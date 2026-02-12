@@ -2,6 +2,56 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.0] - 2026-02-12
+
+### Added
+- Tenant-specific cognitive policy control plane:
+  - New admin endpoints:
+    - `POST /admin/v1/tenants/{tenant_id}/cognitive-policy`
+    - `GET /admin/v1/tenants/{tenant_id}/cognitive-policy`
+  - New cognitive policy persistence and resolution path across memory + PocketBase stores.
+  - New audit outcome tags:
+    - `cognitive_policy=...`
+    - `policy_gate=...`
+- Symbolic overlay V3 and profile surface:
+  - `symbolic_overlay.schema_version`
+  - `symbolic_overlay.overlay_profile`
+  - `symbolic_overlay.max_overlay_hops`
+  - New symbolic telemetry headers:
+    - `X-GLM-Symbolic-Version`
+    - `X-GLM-Symbolic-Profile`
+- Style contract V2 surface:
+  - `response_style.register`
+  - `response_style.verbosity_target`
+  - `response_style.justification_density`
+  - `response_style.audience_mode`
+  - New style telemetry header:
+    - `X-GLM-Style-Audience`
+- Reflection layers + evaluator chain request/config surface:
+  - Request fields:
+    - `reflection_layers_enabled`
+    - `reflection_layer_count`
+    - `evaluator_chain_enabled`
+    - `evaluator_chain`
+    - `evaluator_chain_max_depth`
+  - Config env vars:
+    - `GLM_REFLECTION_LAYERS_ENABLED`
+    - `GLM_REFLECTION_LAYER_COUNT`
+    - `GLM_EVALUATOR_CHAIN_ENABLED`
+    - `GLM_EVALUATOR_CHAIN`
+    - `GLM_EVALUATOR_CHAIN_MAX_DEPTH`
+  - New reflection/evaluator telemetry headers:
+    - `X-GLM-Evaluator-Chain`
+    - `X-GLM-Evaluator-Depth`
+    - `X-GLM-Reflection-Layers`
+    - `X-GLM-Reflection-Stop-Reason`
+
+### Changed
+- Runtime policy enforcement now applies tenant cognitive policy gates before reasoning execution and tool usage.
+- Symbolic and style layers preserve backward-compatible defaults while enabling V3/V2 opt-in behavior.
+- Meta reflection execution now supports evaluator-chain aware stop reasons and explicit reflection-layer telemetry.
+- Existing `meta_reflection_*` and `self_alignment_*` controls remain supported as aliases.
+
 ## [0.3.0] - 2026-02-12
 
 ### Added

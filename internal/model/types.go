@@ -77,6 +77,9 @@ const (
 
 type SymbolicOverlayOptions struct {
 	Mode             string   `json:"mode,omitempty"`
+	SchemaVersion    string   `json:"schema_version,omitempty"`
+	OverlayProfile   string   `json:"overlay_profile,omitempty"`
+	MaxOverlayHops   int      `json:"max_overlay_hops,omitempty"`
 	Types            []string `json:"types,omitempty"`
 	MaxSymbols       int      `json:"max_symbols,omitempty"`
 	IncludeState     bool     `json:"include_state,omitempty"`
@@ -106,6 +109,11 @@ type ReasoningOptions struct {
 	MultiAgentBudgetTokens  int     `json:"multi_agent_budget_tokens,omitempty"`
 	MetaEnabled             bool    `json:"meta_enabled,omitempty"`
 	MetaProfile             string  `json:"meta_profile,omitempty"`
+	ReflectionLayersEnabled bool    `json:"reflection_layers_enabled,omitempty"`
+	ReflectionLayerCount    int     `json:"reflection_layer_count,omitempty"`
+	EvaluatorChainEnabled   bool    `json:"evaluator_chain_enabled,omitempty"`
+	EvaluatorChain          []string `json:"evaluator_chain,omitempty"`
+	EvaluatorChainMaxDepth  int     `json:"evaluator_chain_max_depth,omitempty"`
 	MetaReflectionEnabled   bool    `json:"meta_reflection_enabled,omitempty"`
 	MetaReflectionMaxPasses int     `json:"meta_reflection_max_passes,omitempty"`
 	SelfAlignmentEnabled    bool    `json:"self_alignment_enabled,omitempty"`
@@ -126,17 +134,21 @@ type DocumentOrchestration struct {
 }
 
 type ResponseStyle struct {
-	BreathingWeight   float64  `json:"breathing_weight,omitempty"`
-	ToneShift         string   `json:"tone_shift,omitempty"`
-	StyleAdjustment   string   `json:"style_adjustment,omitempty"`
-	Pacing            string   `json:"pacing,omitempty"`
-	MicroSwitches     []string `json:"micro_switches,omitempty"`
-	MoodShift         float64  `json:"mood_shift,omitempty"`
-	TopicDrift        float64  `json:"topic_drift,omitempty"`
-	SubtextDetection  string   `json:"subtext_detection,omitempty"`
-	RollingSentiment  float64  `json:"rolling_sentiment,omitempty"`
-	ConversationDrift float64  `json:"conversation_drift,omitempty"`
-	RiskFlags         []string `json:"risk_flags,omitempty"`
+	BreathingWeight      float64  `json:"breathing_weight,omitempty"`
+	ToneShift            string   `json:"tone_shift,omitempty"`
+	StyleAdjustment      string   `json:"style_adjustment,omitempty"`
+	Register             string   `json:"register,omitempty"`
+	VerbosityTarget      string   `json:"verbosity_target,omitempty"`
+	JustificationDensity string   `json:"justification_density,omitempty"`
+	AudienceMode         string   `json:"audience_mode,omitempty"`
+	Pacing               string   `json:"pacing,omitempty"`
+	MicroSwitches        []string `json:"micro_switches,omitempty"`
+	MoodShift            float64  `json:"mood_shift,omitempty"`
+	TopicDrift           float64  `json:"topic_drift,omitempty"`
+	SubtextDetection     string   `json:"subtext_detection,omitempty"`
+	RollingSentiment     float64  `json:"rolling_sentiment,omitempty"`
+	ConversationDrift    float64  `json:"conversation_drift,omitempty"`
+	RiskFlags            []string `json:"risk_flags,omitempty"`
 }
 
 type ChatCompletionResponse struct {
@@ -204,6 +216,29 @@ type ModelPolicy struct {
 	ReasoningVisible bool      `json:"reasoning_visible"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type CognitivePolicy struct {
+	ID                            string    `json:"id"`
+	TenantID                      string    `json:"tenant_id"`
+	Status                        string    `json:"status"`
+	Version                       string    `json:"version"`
+	AllowedReasoningModes         []string  `json:"allowed_reasoning_modes,omitempty"`
+	MaxReasoningPasses            int       `json:"max_reasoning_passes,omitempty"`
+	MaxReflectionPasses           int       `json:"max_reflection_passes,omitempty"`
+	MaxSelfAlignmentPasses        int       `json:"max_self_alignment_passes,omitempty"`
+	AllowConstraintBreaking       bool      `json:"allow_constraint_breaking,omitempty"`
+	MaxConstraintBreakingSeverity string    `json:"max_constraint_breaking_severity,omitempty"`
+	AllowAdversarialSelfPlay      bool      `json:"allow_adversarial_self_play,omitempty"`
+	AllowWorldviewFusion          bool      `json:"allow_worldview_fusion,omitempty"`
+	AllowShapeTransform           bool      `json:"allow_shape_transform,omitempty"`
+	AllowSkillCompiler            bool      `json:"allow_skill_compiler,omitempty"`
+	ToolAllowlist                 []string  `json:"tool_allowlist,omitempty"`
+	ToolDenylist                  []string  `json:"tool_denylist,omitempty"`
+	RiskThresholdReject           float64   `json:"risk_threshold_reject,omitempty"`
+	RiskThresholdWarn             float64   `json:"risk_threshold_warn,omitempty"`
+	CreatedAt                     time.Time `json:"created_at"`
+	UpdatedAt                     time.Time `json:"updated_at"`
 }
 
 type Quota struct {

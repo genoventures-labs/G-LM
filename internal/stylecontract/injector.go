@@ -48,6 +48,8 @@ func (i *Injector) contractText() string {
 	switch strings.ToLower(strings.TrimSpace(i.cfg.Version)) {
 	case "v1":
 		return "style_contract=v1. Preserve factual accuracy. Apply response_style only to tone/format. Use breathing_weight for cadence, pacing for density, tone_shift/style_adjustment for wording. Treat micro_switches/risk_flags as hints. subtext_detection remains model-driven."
+	case "v2":
+		return "style_contract=v2. Preserve factual accuracy. Apply response_style to tone, audience framing, verbosity_target, and justification_density. Keep claims unchanged. register and audience_mode control voice and framing only."
 	default:
 		return "style_contract=" + i.cfg.Version + ". Apply response_style safely without changing factual content."
 	}

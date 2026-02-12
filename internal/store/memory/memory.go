@@ -20,6 +20,7 @@ type Store struct {
 	apiByPrefix   map[string][]string
 	roles         map[string]model.Role
 	policies      map[string]model.ModelPolicy
+	cognitive     map[string]model.CognitivePolicy
 	quotas        map[string]model.Quota
 	idempotency   map[string]model.IdempotencyRecord
 	auditByTenant map[string][]model.AuditEvent
@@ -33,6 +34,7 @@ func New() *Store {
 		apiByPrefix:   map[string][]string{},
 		roles:         map[string]model.Role{},
 		policies:      map[string]model.ModelPolicy{},
+		cognitive:     map[string]model.CognitivePolicy{},
 		quotas:        map[string]model.Quota{},
 		idempotency:   map[string]model.IdempotencyRecord{},
 		auditByTenant: map[string][]model.AuditEvent{},
@@ -116,6 +118,32 @@ func (s *Store) GetModelPolicy(_ context.Context, tenantID string) (model.ModelP
 	p, ok := s.policies[tenantID]
 	if !ok {
 		return model.ModelPolicy{}, errNotFound
+	}
+	return p, nil
+}
+
+func (s *Store) UpsertCognitivePolicy(_ context.Context, policy model.CognitivePolicy) (model.CognitivePolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if p, ok := s.cognitive[policy.TenantID]; ok {
+		policy.ID = p.ID
+		policy.CreatedAt = p.CreatedAt
+	} else {
+		policy.ID = uuid.NewString()
+		policy.CreatedAt = now
+	}
+	policy.UpdatedAt = now
+	s.cognitive[policy.TenantID] = policy
+	return policy, nil
+}
+
+func (s *Store) GetCognitivePolicy(_ context.Context, tenantID string) (model.CognitivePolicy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.cognitive[tenantID]
+	if !ok {
+		return model.CognitivePolicy{}, errNotFound
 	}
 	return p, nil
 }

@@ -18,6 +18,8 @@ type Store interface {
 	CreateRole(ctx context.Context, role model.Role) (model.Role, error)
 	UpsertModelPolicy(ctx context.Context, policy model.ModelPolicy) (model.ModelPolicy, error)
 	GetModelPolicy(ctx context.Context, tenantID string) (model.ModelPolicy, error)
+	UpsertCognitivePolicy(ctx context.Context, policy model.CognitivePolicy) (model.CognitivePolicy, error)
+	GetCognitivePolicy(ctx context.Context, tenantID string) (model.CognitivePolicy, error)
 	UpsertQuota(ctx context.Context, quota model.Quota) (model.Quota, error)
 	GetQuota(ctx context.Context, tenantID string) (model.Quota, error)
 

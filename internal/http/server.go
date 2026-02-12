@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -265,7 +266,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.3.0"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.6.0"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -310,6 +311,12 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var req model.ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	cognitivePolicy := s.policy.ResolveCognitivePolicy(ctx, tenantID)
+	policyGateStatus, gateErr := enforceCognitivePolicy(&req, cognitivePolicy)
+	if gateErr != nil {
+		writeError(w, http.StatusForbidden, gateErr.Error())
 		return
 	}
 	if len(req.Messages) == 0 {
@@ -357,6 +364,9 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-GLM-Response-Style", "present")
 		w.Header().Set("X-GLM-Breathing-Weight", formatFloat(req.ResponseStyle.BreathingWeight))
 		w.Header().Set("X-GLM-Pacing", req.ResponseStyle.Pacing)
+		if strings.TrimSpace(req.ResponseStyle.AudienceMode) != "" {
+			w.Header().Set("X-GLM-Style-Audience", req.ResponseStyle.AudienceMode)
+		}
 		if len(req.ResponseStyle.MicroSwitches) > 0 {
 			w.Header().Set("X-GLM-Micro-Switches", strings.Join(req.ResponseStyle.MicroSwitches, ","))
 		}
@@ -414,6 +424,12 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 			if symbolicTypes != "" {
 				w.Header().Set("X-GLM-Symbolic-Types", symbolicTypes)
+			}
+			if strings.TrimSpace(symbolicRes.SchemaVersion) != "" {
+				w.Header().Set("X-GLM-Symbolic-Version", symbolicRes.SchemaVersion)
+			}
+			if strings.TrimSpace(symbolicRes.Profile) != "" {
+				w.Header().Set("X-GLM-Symbolic-Profile", symbolicRes.Profile)
 			}
 		}
 	}
@@ -585,6 +601,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var reasoningTrace *reasoning.Trace
 	usedModel := req.Model
 	outcome := "success"
+	outcome = outcome + "|cognitive_policy=" + cognitivePolicy.Status + "|policy_gate=" + policyGateStatus
 	if toolRequested {
 		outcome = outcome + "|tool_calling=true"
 	}
@@ -905,15 +922,32 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-GLM-Self-Alignment", "error")
 			w.Header().Set("X-GLM-Self-Alignment-Passes", "0")
 			w.Header().Set("X-GLM-Self-Alignment-Reason", "upstream_error")
+			w.Header().Set("X-GLM-Evaluator-Chain", "error")
+			w.Header().Set("X-GLM-Evaluator-Depth", "0")
+			w.Header().Set("X-GLM-Reflection-Layers", strconv.Itoa(metaReflectionPassesForRequest(req, s.cfg)))
+			w.Header().Set("X-GLM-Reflection-Stop-Reason", "evaluator_error")
 		} else {
 			reflectionStatus := "disabled"
 			reflectionPasses := 0
 			reflectionReason := "no_trigger"
 			finalMeta := metaResult
+			chainNames := evaluatorChainForRequest(req, s.cfg)
+			chainDepth := evaluatorChainDepthForRequest(req, s.cfg, len(chainNames))
+			chainEnabled := evaluatorChainEnabledForRequest(req, s.cfg)
+			chainResult := metareasoning.ChainResult{
+				Enabled:    false,
+				Depth:      0,
+				StopReason: "disabled",
+				Final:      metaResult,
+			}
+			if chainEnabled {
+				chainResult = s.meta.EvaluateChain(req, resp, reasoningTrace, stateSnapshot, chainNames, chainDepth)
+				finalMeta = chainResult.Final
+			}
 			reflectionEnabled := metaReflectionEnabledForRequest(req, s.cfg)
 			if reflectionEnabled {
 				reflectionStatus = "skipped"
-				if shouldTriggerReflection(metaResult, req, s.cfg) {
+				if shouldTriggerReflection(finalMeta, req, s.cfg) {
 					maxPasses := metaReflectionPassesForRequest(req, s.cfg)
 					if maxPasses < 1 {
 						reflectionStatus = "skipped"
@@ -921,7 +955,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 					} else {
 						reflectionReason = "decision_trigger"
 						currentResp := resp
-						currentMeta := metaResult
+						currentMeta := finalMeta
 						appliedAny := false
 						for pass := 1; pass <= maxPasses; pass++ {
 							reflectionPasses = pass
@@ -938,17 +972,38 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 								reflectionReason = "upstream_error"
 								break
 							}
+							revisedChain := metareasoning.ChainResult{
+								Enabled:    false,
+								Depth:      0,
+								StopReason: "disabled",
+								Final:      revisedMeta,
+							}
+							if chainEnabled {
+								revisedChain = s.meta.EvaluateChain(req, revisedResp, reasoningTrace, stateSnapshot, chainNames, chainDepth)
+								revisedMeta = revisedChain.Final
+							}
 							if !shouldAdoptReflected(currentMeta, revisedMeta) {
 								if appliedAny {
 									reflectionStatus = "applied"
-									reflectionReason = "no_further_improvement"
+									reflectionReason = "no_improvement"
 								}
 								break
 							}
 							currentResp = revisedResp
 							currentMeta = revisedMeta
+							if chainEnabled {
+								chainResult = revisedChain
+							}
 							appliedAny = true
 							reflectionStatus = "applied"
+							if chainEnabled && chainResult.StopReason == "policy_reject" {
+								reflectionReason = "policy_reject"
+								break
+							}
+							if chainEnabled && chainResult.StopReason == "risk_below_threshold" {
+								reflectionReason = "risk_below_threshold"
+								break
+							}
 							if !shouldTriggerReflection(currentMeta, req, s.cfg) {
 								break
 							}
@@ -956,6 +1011,8 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 						if appliedAny {
 							resp = currentResp
 							finalMeta = currentMeta
+						} else if chainEnabled && chainResult.StopReason != "" {
+							reflectionReason = chainResult.StopReason
 						}
 					}
 				}
@@ -972,6 +1029,19 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-GLM-Self-Alignment", reflectionStatus)
 			w.Header().Set("X-GLM-Self-Alignment-Passes", strconv.Itoa(reflectionPasses))
 			w.Header().Set("X-GLM-Self-Alignment-Reason", reflectionReason)
+			if chainEnabled {
+				w.Header().Set("X-GLM-Evaluator-Chain", strings.Join(chainNames, ","))
+				w.Header().Set("X-GLM-Evaluator-Depth", strconv.Itoa(chainResult.Depth))
+			} else {
+				w.Header().Set("X-GLM-Evaluator-Chain", "disabled")
+				w.Header().Set("X-GLM-Evaluator-Depth", "0")
+			}
+			w.Header().Set("X-GLM-Reflection-Layers", strconv.Itoa(metaReflectionPassesForRequest(req, s.cfg)))
+			stopReason := reflectionReason
+			if chainEnabled && chainResult.StopReason != "" && reflectionStatus != "error" {
+				stopReason = chainResult.StopReason
+			}
+			w.Header().Set("X-GLM-Reflection-Stop-Reason", stopReason)
 			outcome = outcome +
 				"|meta_decision=" + finalMeta.Decision +
 				"|meta_conf=" + formatFloat(finalMeta.Confidence) +
@@ -980,6 +1050,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				"|meta_reflection=" + reflectionStatus +
 				"|meta_reflection_reason=" + reflectionReason +
 				"|meta_reflection_passes=" + strconv.Itoa(reflectionPasses) +
+				"|evaluator_chain=" + w.Header().Get("X-GLM-Evaluator-Chain") +
+				"|evaluator_depth=" + w.Header().Get("X-GLM-Evaluator-Depth") +
+				"|reflection_layers=" + w.Header().Get("X-GLM-Reflection-Layers") +
+				"|reflection_stop_reason=" + w.Header().Get("X-GLM-Reflection-Stop-Reason") +
 				"|self_alignment=" + reflectionStatus +
 				"|self_alignment_reason=" + reflectionReason +
 				"|self_alignment_passes=" + strconv.Itoa(reflectionPasses)
@@ -1107,16 +1181,25 @@ func mctsV2EnabledForRequest(req model.ChatCompletionRequest, cfg config.Config)
 }
 
 func metaReflectionEnabledForRequest(req model.ChatCompletionRequest, cfg config.Config) bool {
+	if req.Reasoning != nil && req.Reasoning.ReflectionLayersEnabled {
+		return true
+	}
 	if req.Reasoning != nil && (req.Reasoning.MetaReflectionEnabled || req.Reasoning.SelfAlignmentEnabled) {
 		return true
 	}
-	return cfg.MetaReflectionEnabled || cfg.SelfAlignmentEnabled
+	return cfg.ReflectionLayersEnabled || cfg.MetaReflectionEnabled || cfg.SelfAlignmentEnabled
 }
 
 func metaReflectionPassesForRequest(req model.ChatCompletionRequest, cfg config.Config) int {
-	passes := cfg.MetaReflectionMaxPasses
+	passes := cfg.ReflectionLayerCount
+	if passes <= 0 {
+		passes = cfg.MetaReflectionMaxPasses
+	}
 	if cfg.SelfAlignmentMaxPasses > 0 {
 		passes = cfg.SelfAlignmentMaxPasses
+	}
+	if req.Reasoning != nil && req.Reasoning.ReflectionLayerCount > 0 {
+		passes = req.Reasoning.ReflectionLayerCount
 	}
 	if req.Reasoning != nil && req.Reasoning.MetaReflectionMaxPasses > 0 {
 		passes = req.Reasoning.MetaReflectionMaxPasses
@@ -1155,6 +1238,55 @@ func shouldTriggerReflection(meta metareasoning.Result, req model.ChatCompletion
 	}
 	_, ok := allowed[decision]
 	return ok
+}
+
+func evaluatorChainEnabledForRequest(req model.ChatCompletionRequest, cfg config.Config) bool {
+	if req.Reasoning != nil && req.Reasoning.EvaluatorChainEnabled {
+		return true
+	}
+	return cfg.EvaluatorChainEnabled
+}
+
+func evaluatorChainForRequest(req model.ChatCompletionRequest, cfg config.Config) []string {
+	chain := cfg.EvaluatorChain
+	if req.Reasoning != nil && len(req.Reasoning.EvaluatorChain) > 0 {
+		chain = req.Reasoning.EvaluatorChain
+	}
+	if len(chain) == 0 {
+		chain = []string{"consistency", "risk", "policy", "factuality", "style"}
+	}
+	out := make([]string, 0, len(chain))
+	for _, item := range chain {
+		v := strings.ToLower(strings.TrimSpace(item))
+		switch v {
+		case "consistency", "risk", "policy", "factuality", "style":
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"risk"}
+	}
+	return out
+}
+
+func evaluatorChainDepthForRequest(req model.ChatCompletionRequest, cfg config.Config, chainLen int) int {
+	depth := cfg.EvaluatorChainMaxDepth
+	if depth <= 0 {
+		depth = chainLen
+	}
+	if req.Reasoning != nil && req.Reasoning.EvaluatorChainMaxDepth > 0 {
+		depth = req.Reasoning.EvaluatorChainMaxDepth
+	}
+	if depth > chainLen {
+		depth = chainLen
+	}
+	if depth < 1 {
+		depth = 1
+	}
+	if depth > 8 {
+		depth = 8
+	}
+	return depth
 }
 
 func buildMetaReflectionRequest(
@@ -1386,6 +1518,12 @@ func (s *Server) tenantScopedAdmin(w http.ResponseWriter, r *http.Request) {
 		s.createRole(w, r, tenantID)
 	case "model-policy":
 		s.upsertModelPolicy(w, r, tenantID)
+	case "cognitive-policy":
+		if r.Method == http.MethodGet {
+			s.getCognitivePolicy(w, r, tenantID)
+			return
+		}
+		s.upsertCognitivePolicy(w, r, tenantID)
 	case "quotas":
 		s.upsertQuota(w, r, tenantID)
 	case "audit-events":
@@ -1460,6 +1598,40 @@ func (s *Server) upsertModelPolicy(w http.ResponseWriter, r *http.Request, tenan
 		writeError(w, http.StatusInternalServerError, "failed to upsert model policy")
 		return
 	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) upsertCognitivePolicy(w http.ResponseWriter, r *http.Request, tenantID string) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var p model.CognitivePolicy
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid cognitive policy")
+		return
+	}
+	p.TenantID = tenantID
+	if strings.TrimSpace(p.Status) == "" {
+		p.Status = "active"
+	}
+	if strings.TrimSpace(p.Version) == "" {
+		p.Version = "v1"
+	}
+	out, err := s.store.UpsertCognitivePolicy(r.Context(), p)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to upsert cognitive policy")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) getCognitivePolicy(w http.ResponseWriter, r *http.Request, tenantID string) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	out := s.policy.ResolveCognitivePolicy(r.Context(), tenantID)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1740,6 +1912,18 @@ func ensureResponseStyle(req model.ChatCompletionRequest, st state.CognitiveStat
 	if strings.TrimSpace(req.ResponseStyle.SubtextDetection) == "" {
 		req.ResponseStyle.SubtextDetection = "model-driven"
 	}
+	if strings.TrimSpace(req.ResponseStyle.Register) == "" {
+		req.ResponseStyle.Register = "technical"
+	}
+	if strings.TrimSpace(req.ResponseStyle.VerbosityTarget) == "" {
+		req.ResponseStyle.VerbosityTarget = "medium"
+	}
+	if strings.TrimSpace(req.ResponseStyle.JustificationDensity) == "" {
+		req.ResponseStyle.JustificationDensity = "medium"
+	}
+	if strings.TrimSpace(req.ResponseStyle.AudienceMode) == "" {
+		req.ResponseStyle.AudienceMode = "engineer"
+	}
 	if len(req.ResponseStyle.RiskFlags) == 0 {
 		req.ResponseStyle.RiskFlags = buildRiskFlags(st, userText)
 	}
@@ -1892,6 +2076,74 @@ func (s *Server) resolveReasoningTimeout(req model.ChatCompletionRequest) time.D
 		return 60 * time.Second
 	}
 	return s.cfg.ReasoningStageTimeout
+}
+
+func enforceCognitivePolicy(req *model.ChatCompletionRequest, cp model.CognitivePolicy) (string, error) {
+	status := strings.ToLower(strings.TrimSpace(cp.Status))
+	if status == "" {
+		status = "active"
+	}
+	if status == "disabled" {
+		return "disabled", nil
+	}
+	if req == nil {
+		return "allow", nil
+	}
+	if req.Reasoning != nil {
+		mode := strings.ToLower(strings.TrimSpace(req.Reasoning.Mode))
+		if mode == "pipeline" {
+			mode = "tot"
+		}
+		if mode != "" && len(cp.AllowedReasoningModes) > 0 {
+			if !containsFold(cp.AllowedReasoningModes, mode) {
+				return "blocked_reasoning_mode", fmt.Errorf("reasoning mode %q is not allowed by cognitive policy", mode)
+			}
+		}
+		if cp.MaxReasoningPasses > 0 {
+			if req.Reasoning.Branches > cp.MaxReasoningPasses {
+				req.Reasoning.Branches = cp.MaxReasoningPasses
+			}
+			if req.Reasoning.MCTSMaxRollouts > cp.MaxReasoningPasses {
+				req.Reasoning.MCTSMaxRollouts = cp.MaxReasoningPasses
+			}
+			if req.Reasoning.MultiAgentMaxRounds > cp.MaxReasoningPasses {
+				req.Reasoning.MultiAgentMaxRounds = cp.MaxReasoningPasses
+			}
+			if req.Reasoning.DecomposeMaxSubtasks > cp.MaxReasoningPasses {
+				req.Reasoning.DecomposeMaxSubtasks = cp.MaxReasoningPasses
+			}
+		}
+		if cp.MaxReflectionPasses > 0 && req.Reasoning.MetaReflectionMaxPasses > cp.MaxReflectionPasses {
+			req.Reasoning.MetaReflectionMaxPasses = cp.MaxReflectionPasses
+		}
+		if cp.MaxSelfAlignmentPasses > 0 && req.Reasoning.SelfAlignmentMaxPasses > cp.MaxSelfAlignmentPasses {
+			req.Reasoning.SelfAlignmentMaxPasses = cp.MaxSelfAlignmentPasses
+		}
+	}
+	if len(req.Tools) > 0 {
+		for _, tool := range req.Tools {
+			name := strings.TrimSpace(tool.Function.Name)
+			if name == "" {
+				continue
+			}
+			if len(cp.ToolDenylist) > 0 && containsFold(cp.ToolDenylist, name) {
+				return "blocked_tool_denylist", fmt.Errorf("tool %q is denied by cognitive policy", name)
+			}
+			if len(cp.ToolAllowlist) > 0 && !containsFold(cp.ToolAllowlist, name) {
+				return "blocked_tool_allowlist", fmt.Errorf("tool %q is not in cognitive policy allowlist", name)
+			}
+		}
+	}
+	return "allow", nil
+}
+
+func containsFold(items []string, target string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(target)) {
+			return true
+		}
+	}
+	return false
 }
 
 func safeMetaEvaluate(

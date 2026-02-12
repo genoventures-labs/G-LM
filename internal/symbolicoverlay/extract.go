@@ -12,7 +12,13 @@ import (
 var wordRe = regexp.MustCompile(`[a-z0-9][a-z0-9_\-]{1,}`)
 
 func buildArtifact(req model.ChatCompletionRequest, st state.CognitiveState, opt normalizedOptions, maxDocChars int) (OverlayArtifact, []string, int) {
-	artifact := OverlayArtifact{Mode: opt.Mode, Types: append([]string{}, opt.Types...)}
+	artifact := OverlayArtifact{
+		SchemaVersion:  opt.SchemaVersion,
+		Profile:        opt.OverlayProfile,
+		MaxOverlayHops: opt.MaxOverlayHops,
+		Mode:           opt.Mode,
+		Types:          append([]string{}, opt.Types...),
+	}
 	flags := []string{}
 	sources := collectSources(req, st, opt, maxDocChars)
 	remaining := opt.MaxSymbols
