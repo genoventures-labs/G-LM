@@ -21,6 +21,12 @@ func TestResolveCognitivePolicyDefault(t *testing.T) {
 	if got.Version != "v1" {
 		t.Fatalf("expected v1 default version, got %q", got.Version)
 	}
+	if !got.AllowContextReindex {
+		t.Fatal("expected allow_context_reindex default true")
+	}
+	if !got.AllowSkillCompiler {
+		t.Fatal("expected allow_skill_compiler default true")
+	}
 }
 
 func TestResolveCognitivePolicyNormalized(t *testing.T) {

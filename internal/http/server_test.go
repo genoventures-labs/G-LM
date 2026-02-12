@@ -2111,9 +2111,9 @@ func TestEvaluatorChainHeaders(t *testing.T) {
 	body := map[string]any{
 		"model": "mistral:7b",
 		"reasoning": map[string]any{
-			"meta_enabled":            true,
-			"evaluator_chain_enabled": true,
-			"evaluator_chain":         []string{"risk", "policy"},
+			"meta_enabled":              true,
+			"evaluator_chain_enabled":   true,
+			"evaluator_chain":           []string{"risk", "policy"},
 			"evaluator_chain_max_depth": 2,
 		},
 		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
@@ -2154,12 +2154,12 @@ func TestReflectionLayersRequestAlias(t *testing.T) {
 	body := map[string]any{
 		"model": "mistral:7b",
 		"reasoning": map[string]any{
-			"meta_enabled":               true,
-			"reflection_layers_enabled":  true,
-			"reflection_layer_count":     1,
-			"evaluator_chain_enabled":    true,
-			"evaluator_chain":            []string{"risk"},
-			"evaluator_chain_max_depth":  1,
+			"meta_enabled":              true,
+			"reflection_layers_enabled": true,
+			"reflection_layer_count":    1,
+			"evaluator_chain_enabled":   true,
+			"evaluator_chain":           []string{"risk"},
+			"evaluator_chain_max_depth": 1,
 		},
 		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
 	}
@@ -2176,6 +2176,76 @@ func TestReflectionLayersRequestAlias(t *testing.T) {
 	}
 	if rr.Header().Get("X-GLM-Reflection-Layers") != "1" {
 		t.Fatalf("expected reflection layers=1, got %q", rr.Header().Get("X-GLM-Reflection-Layers"))
+	}
+}
+
+func TestContextReindexAndSkillCompilerHeaders(t *testing.T) {
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, nil, func(cfg *config.Config) {
+		cfg.ContextReindexEnabled = true
+		cfg.ContextReindexScope = "session"
+		cfg.SkillCompilerEnabled = true
+		cfg.SkillCompilerProfile = "safe"
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"context_reindex_enabled":      true,
+			"context_reindex_scope":        "session",
+			"skill_compiler_enabled":       true,
+			"skill_compiler_profile":       "safe",
+			"skill_compiler_budget_tokens": 500,
+		},
+		"documents": []map[string]any{
+			{"id": "doc-ctx-1", "text": "reference"},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "implement and compare rollout options"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Context-Reindex") != "applied" {
+		t.Fatalf("expected context reindex applied, got %q", rr.Header().Get("X-GLM-Context-Reindex"))
+	}
+	if rr.Header().Get("X-GLM-Context-Reindex-Scope") != "session" {
+		t.Fatalf("expected context reindex scope session, got %q", rr.Header().Get("X-GLM-Context-Reindex-Scope"))
+	}
+	if rr.Header().Get("X-GLM-Skill-Compiler") != "applied" {
+		t.Fatalf("expected skill compiler applied, got %q", rr.Header().Get("X-GLM-Skill-Compiler"))
+	}
+	if rr.Header().Get("X-GLM-Skill-Plan-Nodes") == "" || rr.Header().Get("X-GLM-Skill-Plan-Nodes") == "0" {
+		t.Fatalf("expected skill plan nodes header > 0, got %q", rr.Header().Get("X-GLM-Skill-Plan-Nodes"))
+	}
+}
+
+func TestCognitivePolicyBlocksContextReindex(t *testing.T) {
+	srv, adminKey, runtimeKey, tenantID, _ := setupServerWithTenant(t)
+	policyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenantID+"/cognitive-policy", bytes.NewBufferString(`{"status":"active","allow_context_reindex":false}`))
+	policyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	policyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(policyRR, policyReq)
+	if policyRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 policy upsert, got %d: %s", policyRR.Code, policyRR.Body.String())
+	}
+
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"context_reindex_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

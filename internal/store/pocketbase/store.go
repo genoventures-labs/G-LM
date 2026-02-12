@@ -442,6 +442,7 @@ func (s *Store) UpsertCognitivePolicy(ctx context.Context, policy model.Cognitiv
 		"allow_adversarial_self_play":      policy.AllowAdversarialSelfPlay,
 		"allow_worldview_fusion":           policy.AllowWorldviewFusion,
 		"allow_shape_transform":            policy.AllowShapeTransform,
+		"allow_context_reindex":            policy.AllowContextReindex,
 		"allow_skill_compiler":             policy.AllowSkillCompiler,
 		"tool_allowlist":                   policy.ToolAllowlist,
 		"tool_denylist":                    policy.ToolDenylist,

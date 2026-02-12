@@ -87,37 +87,42 @@ type SymbolicOverlayOptions struct {
 }
 
 type ReasoningOptions struct {
-	Mode                    string  `json:"mode,omitempty"`
-	Branches                int     `json:"branches,omitempty"`
-	SelfEvaluate            bool    `json:"self_evaluate,omitempty"`
-	DetectContradictions    bool    `json:"detect_contradictions,omitempty"`
-	DecomposeEnabled        bool    `json:"decompose_enabled,omitempty"`
-	DecomposeMaxSubtasks    int     `json:"decompose_max_subtasks,omitempty"`
-	DecomposeMaxDepth       int     `json:"decompose_max_depth,omitempty"`
-	DecomposeBudgetTokens   int     `json:"decompose_budget_tokens,omitempty"`
-	MCTSMaxRollouts         int     `json:"mcts_max_rollouts,omitempty"`
-	MCTSMaxDepth            int     `json:"mcts_max_depth,omitempty"`
-	MCTSExploration         float64 `json:"mcts_exploration,omitempty"`
-	MCTSTimeoutMs           int     `json:"mcts_timeout_ms,omitempty"`
-	MCTSV2Enabled           bool    `json:"mcts_v2_enabled,omitempty"`
-	MCTSEarlyStopWindow     int     `json:"mcts_early_stop_window,omitempty"`
-	MCTSEarlyStopDelta      float64 `json:"mcts_early_stop_delta,omitempty"`
-	MultiAgentEnabled       bool    `json:"multi_agent_enabled,omitempty"`
-	MultiAgentMaxAgents     int     `json:"multi_agent_max_agents,omitempty"`
-	MultiAgentMaxRounds     int     `json:"multi_agent_max_rounds,omitempty"`
-	MultiAgentTimeoutMs     int     `json:"multi_agent_timeout_ms,omitempty"`
-	MultiAgentBudgetTokens  int     `json:"multi_agent_budget_tokens,omitempty"`
-	MetaEnabled             bool    `json:"meta_enabled,omitempty"`
-	MetaProfile             string  `json:"meta_profile,omitempty"`
-	ReflectionLayersEnabled bool    `json:"reflection_layers_enabled,omitempty"`
-	ReflectionLayerCount    int     `json:"reflection_layer_count,omitempty"`
-	EvaluatorChainEnabled   bool    `json:"evaluator_chain_enabled,omitempty"`
-	EvaluatorChain          []string `json:"evaluator_chain,omitempty"`
-	EvaluatorChainMaxDepth  int     `json:"evaluator_chain_max_depth,omitempty"`
-	MetaReflectionEnabled   bool    `json:"meta_reflection_enabled,omitempty"`
-	MetaReflectionMaxPasses int     `json:"meta_reflection_max_passes,omitempty"`
-	SelfAlignmentEnabled    bool    `json:"self_alignment_enabled,omitempty"`
-	SelfAlignmentMaxPasses  int     `json:"self_alignment_max_passes,omitempty"`
+	Mode                      string   `json:"mode,omitempty"`
+	Branches                  int      `json:"branches,omitempty"`
+	SelfEvaluate              bool     `json:"self_evaluate,omitempty"`
+	DetectContradictions      bool     `json:"detect_contradictions,omitempty"`
+	DecomposeEnabled          bool     `json:"decompose_enabled,omitempty"`
+	DecomposeMaxSubtasks      int      `json:"decompose_max_subtasks,omitempty"`
+	DecomposeMaxDepth         int      `json:"decompose_max_depth,omitempty"`
+	DecomposeBudgetTokens     int      `json:"decompose_budget_tokens,omitempty"`
+	MCTSMaxRollouts           int      `json:"mcts_max_rollouts,omitempty"`
+	MCTSMaxDepth              int      `json:"mcts_max_depth,omitempty"`
+	MCTSExploration           float64  `json:"mcts_exploration,omitempty"`
+	MCTSTimeoutMs             int      `json:"mcts_timeout_ms,omitempty"`
+	MCTSV2Enabled             bool     `json:"mcts_v2_enabled,omitempty"`
+	MCTSEarlyStopWindow       int      `json:"mcts_early_stop_window,omitempty"`
+	MCTSEarlyStopDelta        float64  `json:"mcts_early_stop_delta,omitempty"`
+	MultiAgentEnabled         bool     `json:"multi_agent_enabled,omitempty"`
+	MultiAgentMaxAgents       int      `json:"multi_agent_max_agents,omitempty"`
+	MultiAgentMaxRounds       int      `json:"multi_agent_max_rounds,omitempty"`
+	MultiAgentTimeoutMs       int      `json:"multi_agent_timeout_ms,omitempty"`
+	MultiAgentBudgetTokens    int      `json:"multi_agent_budget_tokens,omitempty"`
+	MetaEnabled               bool     `json:"meta_enabled,omitempty"`
+	MetaProfile               string   `json:"meta_profile,omitempty"`
+	ReflectionLayersEnabled   bool     `json:"reflection_layers_enabled,omitempty"`
+	ReflectionLayerCount      int      `json:"reflection_layer_count,omitempty"`
+	EvaluatorChainEnabled     bool     `json:"evaluator_chain_enabled,omitempty"`
+	EvaluatorChain            []string `json:"evaluator_chain,omitempty"`
+	EvaluatorChainMaxDepth    int      `json:"evaluator_chain_max_depth,omitempty"`
+	MetaReflectionEnabled     bool     `json:"meta_reflection_enabled,omitempty"`
+	MetaReflectionMaxPasses   int      `json:"meta_reflection_max_passes,omitempty"`
+	SelfAlignmentEnabled      bool     `json:"self_alignment_enabled,omitempty"`
+	SelfAlignmentMaxPasses    int      `json:"self_alignment_max_passes,omitempty"`
+	ContextReindexEnabled     bool     `json:"context_reindex_enabled,omitempty"`
+	ContextReindexScope       string   `json:"context_reindex_scope,omitempty"`
+	SkillCompilerEnabled      bool     `json:"skill_compiler_enabled,omitempty"`
+	SkillCompilerProfile      string   `json:"skill_compiler_profile,omitempty"`
+	SkillCompilerBudgetTokens int      `json:"skill_compiler_budget_tokens,omitempty"`
 }
 
 type DocumentInput struct {
@@ -232,6 +237,7 @@ type CognitivePolicy struct {
 	AllowAdversarialSelfPlay      bool      `json:"allow_adversarial_self_play,omitempty"`
 	AllowWorldviewFusion          bool      `json:"allow_worldview_fusion,omitempty"`
 	AllowShapeTransform           bool      `json:"allow_shape_transform,omitempty"`
+	AllowContextReindex           bool      `json:"allow_context_reindex,omitempty"`
 	AllowSkillCompiler            bool      `json:"allow_skill_compiler,omitempty"`
 	ToolAllowlist                 []string  `json:"tool_allowlist,omitempty"`
 	ToolDenylist                  []string  `json:"tool_denylist,omitempty"`

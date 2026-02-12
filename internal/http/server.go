@@ -19,6 +19,7 @@ import (
 	"github.com/mike/cognitive-llm/internal/audit"
 	"github.com/mike/cognitive-llm/internal/auth"
 	"github.com/mike/cognitive-llm/internal/config"
+	"github.com/mike/cognitive-llm/internal/contextindex"
 	"github.com/mike/cognitive-llm/internal/document"
 	"github.com/mike/cognitive-llm/internal/idempotency"
 	"github.com/mike/cognitive-llm/internal/intent"
@@ -30,6 +31,7 @@ import (
 	"github.com/mike/cognitive-llm/internal/policy"
 	"github.com/mike/cognitive-llm/internal/ratelimit"
 	"github.com/mike/cognitive-llm/internal/reasoning"
+	"github.com/mike/cognitive-llm/internal/skillcompiler"
 	"github.com/mike/cognitive-llm/internal/state"
 	"github.com/mike/cognitive-llm/internal/store"
 	"github.com/mike/cognitive-llm/internal/stylecontract"
@@ -58,6 +60,8 @@ type Server struct {
 	meta     *metareasoning.Evaluator
 	style    *stylecontract.Injector
 	symbolic *symbolicoverlay.Service
+	reindex  *contextindex.Service
+	compiler *skillcompiler.Service
 	tools    *toolcalling.Client
 	state    *state.Manager
 	upstream upstream
@@ -198,6 +202,15 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 			SupervisionAutoRevise:      cfg.SymbolicSupervisionAutoRevise,
 			SupervisionMaxPasses:       cfg.SymbolicSupervisionMaxPasses,
 		}),
+		reindex: contextindex.New(contextindex.Config{
+			Enabled:      cfg.ContextReindexEnabled,
+			DefaultScope: cfg.ContextReindexScope,
+		}),
+		compiler: skillcompiler.New(skillcompiler.Config{
+			Enabled:      cfg.SkillCompilerEnabled,
+			Profile:      cfg.SkillCompilerProfile,
+			BudgetTokens: cfg.SkillCompilerBudgetTokens,
+		}),
 		tools:    toolcalling.New(cfg.ToolServerBaseURL, cfg.ToolServerAPIKey, cfg.ToolServerClientID, time.Duration(cfg.ToolCallingTimeoutSeconds)*time.Second),
 		state:    state.NewManager(cfg.StateHistoryWindow),
 		upstream: upstream,
@@ -266,7 +279,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.6.0"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.7.0"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -577,6 +590,34 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	reindexRes := s.reindex.Build(req, stateSnapshot)
+	if reindexRes.Enabled {
+		w.Header().Set("X-GLM-Context-Reindex", "enabled")
+		w.Header().Set("X-GLM-Context-Reindex-Scope", reindexRes.Scope)
+		if reindexRes.Applied {
+			req = s.reindex.Inject(req, reindexRes)
+			w.Header().Set("X-GLM-Context-Reindex", "applied")
+		} else {
+			w.Header().Set("X-GLM-Context-Reindex", "skipped")
+		}
+	} else {
+		w.Header().Set("X-GLM-Context-Reindex", "disabled")
+	}
+	compileRes := s.compiler.Compile(req)
+	if compileRes.Enabled {
+		w.Header().Set("X-GLM-Skill-Compiler", "enabled")
+		if compileRes.Applied {
+			req = s.compiler.Inject(req, compileRes)
+			w.Header().Set("X-GLM-Skill-Compiler", "applied")
+			w.Header().Set("X-GLM-Skill-Plan-Nodes", strconv.Itoa(len(compileRes.Nodes)))
+		} else {
+			w.Header().Set("X-GLM-Skill-Compiler", "skipped")
+			w.Header().Set("X-GLM-Skill-Plan-Nodes", "0")
+		}
+	} else {
+		w.Header().Set("X-GLM-Skill-Compiler", "disabled")
+		w.Header().Set("X-GLM-Skill-Plan-Nodes", "0")
+	}
 
 	idemKey := r.Header.Get("Idempotency-Key")
 	reqHash := s.idem.RequestHash(req)
@@ -634,6 +675,12 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			outcome = outcome + "|memory_replay=triggered"
 		}
 	}
+	outcome = outcome + "|context_reindex=" + w.Header().Get("X-GLM-Context-Reindex")
+	if scope := w.Header().Get("X-GLM-Context-Reindex-Scope"); scope != "" {
+		outcome = outcome + "|context_reindex_scope=" + scope
+	}
+	outcome = outcome + "|skill_compiler=" + w.Header().Get("X-GLM-Skill-Compiler")
+	outcome = outcome + "|skill_plan_nodes=" + w.Header().Get("X-GLM-Skill-Plan-Nodes")
 	execUpstream := s.upstreamForRequest(req)
 	if s.reasoner.ShouldExecute(req, stateSnapshot) {
 		var trace reasoning.Trace
@@ -2118,6 +2165,12 @@ func enforceCognitivePolicy(req *model.ChatCompletionRequest, cp model.Cognitive
 		}
 		if cp.MaxSelfAlignmentPasses > 0 && req.Reasoning.SelfAlignmentMaxPasses > cp.MaxSelfAlignmentPasses {
 			req.Reasoning.SelfAlignmentMaxPasses = cp.MaxSelfAlignmentPasses
+		}
+		if req.Reasoning.ContextReindexEnabled && !cp.AllowContextReindex {
+			return "blocked_context_reindex", fmt.Errorf("context reindex is not allowed by cognitive policy")
+		}
+		if req.Reasoning.SkillCompilerEnabled && !cp.AllowSkillCompiler {
+			return "blocked_skill_compiler", fmt.Errorf("skill compiler is not allowed by cognitive policy")
 		}
 	}
 	if len(req.Tools) > 0 {

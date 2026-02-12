@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.0] - 2026-02-12
+
+### Added
+- Contextual re-indexing request controls:
+  - `reasoning.context_reindex_enabled`
+  - `reasoning.context_reindex_scope` (`request|session`)
+- Primitive-level skill compiler request controls:
+  - `reasoning.skill_compiler_enabled`
+  - `reasoning.skill_compiler_profile` (`safe|balanced|aggressive`)
+  - `reasoning.skill_compiler_budget_tokens`
+- New context reindex module:
+  - `internal/contextindex`
+  - request/session-scoped contextual anchor building and injection pre-stage
+- New skill compiler module:
+  - `internal/skillcompiler`
+  - primitive execution-plan compilation and injection pre-stage
+- New runtime telemetry headers:
+  - `X-GLM-Context-Reindex`
+  - `X-GLM-Context-Reindex-Scope`
+  - `X-GLM-Skill-Compiler`
+  - `X-GLM-Skill-Plan-Nodes`
+- New optional config surface:
+  - `GLM_CONTEXT_REINDEX_ENABLED`
+  - `GLM_CONTEXT_REINDEX_SCOPE`
+  - `GLM_SKILL_COMPILER_ENABLED`
+  - `GLM_SKILL_COMPILER_PROFILE`
+  - `GLM_SKILL_COMPILER_BUDGET_TOKENS`
+
+### Changed
+- Cognitive policy now supports gating context reindex and skill compiler activations (`allow_context_reindex`, existing `allow_skill_compiler`).
+- Audit outcomes now include context reindex and skill compiler status markers.
+- Default behavior remains backward-compatible and opt-in for both Phase 3 features.
+
 ## [0.6.0] - 2026-02-12
 
 ### Added

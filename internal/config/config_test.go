@@ -474,3 +474,53 @@ func TestLoadReflectionLayersFromEnv(t *testing.T) {
 		t.Fatalf("expected evaluator chain depth 2, got %d", cfg.EvaluatorChainMaxDepth)
 	}
 }
+
+func TestLoadContextReindexAndSkillCompilerDefaults(t *testing.T) {
+	t.Setenv("GLM_CONTEXT_REINDEX_ENABLED", "")
+	t.Setenv("GLM_CONTEXT_REINDEX_SCOPE", "")
+	t.Setenv("GLM_SKILL_COMPILER_ENABLED", "")
+	t.Setenv("GLM_SKILL_COMPILER_PROFILE", "")
+	t.Setenv("GLM_SKILL_COMPILER_BUDGET_TOKENS", "")
+
+	cfg := Load()
+	if cfg.ContextReindexEnabled {
+		t.Fatal("expected context reindex disabled by default")
+	}
+	if cfg.ContextReindexScope != "request" {
+		t.Fatalf("expected context reindex scope request, got %q", cfg.ContextReindexScope)
+	}
+	if cfg.SkillCompilerEnabled {
+		t.Fatal("expected skill compiler disabled by default")
+	}
+	if cfg.SkillCompilerProfile != "safe" {
+		t.Fatalf("expected skill compiler profile safe, got %q", cfg.SkillCompilerProfile)
+	}
+	if cfg.SkillCompilerBudgetTokens != 600 {
+		t.Fatalf("expected skill compiler budget 600, got %d", cfg.SkillCompilerBudgetTokens)
+	}
+}
+
+func TestLoadContextReindexAndSkillCompilerFromEnv(t *testing.T) {
+	t.Setenv("GLM_CONTEXT_REINDEX_ENABLED", "true")
+	t.Setenv("GLM_CONTEXT_REINDEX_SCOPE", "session")
+	t.Setenv("GLM_SKILL_COMPILER_ENABLED", "true")
+	t.Setenv("GLM_SKILL_COMPILER_PROFILE", "balanced")
+	t.Setenv("GLM_SKILL_COMPILER_BUDGET_TOKENS", "750")
+
+	cfg := Load()
+	if !cfg.ContextReindexEnabled {
+		t.Fatal("expected context reindex enabled from env")
+	}
+	if cfg.ContextReindexScope != "session" {
+		t.Fatalf("expected context reindex scope session, got %q", cfg.ContextReindexScope)
+	}
+	if !cfg.SkillCompilerEnabled {
+		t.Fatal("expected skill compiler enabled from env")
+	}
+	if cfg.SkillCompilerProfile != "balanced" {
+		t.Fatalf("expected skill compiler profile balanced, got %q", cfg.SkillCompilerProfile)
+	}
+	if cfg.SkillCompilerBudgetTokens != 750 {
+		t.Fatalf("expected skill compiler budget 750, got %d", cfg.SkillCompilerBudgetTokens)
+	}
+}

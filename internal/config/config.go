@@ -136,6 +136,11 @@ type Config struct {
 	MetaReflectionTriggerDecisions     []string
 	SelfAlignmentEnabled               bool
 	SelfAlignmentMaxPasses             int
+	ContextReindexEnabled              bool
+	ContextReindexScope                string
+	SkillCompilerEnabled               bool
+	SkillCompilerProfile               string
+	SkillCompilerBudgetTokens          int
 	RateLimitRPM                       int
 	AuditRetentionDays                 int
 	ReasoningHiddenByDefault           bool
@@ -273,6 +278,11 @@ func Load() Config {
 		MetaReflectionTriggerDecisions:     splitCSV(env("GLM_META_REFLECTION_TRIGGER_DECISIONS", "caution,reject")),
 		SelfAlignmentEnabled:               envBool("GLM_SELF_ALIGNMENT_ENABLED", false),
 		SelfAlignmentMaxPasses:             envInt("GLM_SELF_ALIGNMENT_MAX_PASSES", 2),
+		ContextReindexEnabled:              envBool("GLM_CONTEXT_REINDEX_ENABLED", false),
+		ContextReindexScope:                env("GLM_CONTEXT_REINDEX_SCOPE", "request"),
+		SkillCompilerEnabled:               envBool("GLM_SKILL_COMPILER_ENABLED", false),
+		SkillCompilerProfile:               env("GLM_SKILL_COMPILER_PROFILE", "safe"),
+		SkillCompilerBudgetTokens:          envInt("GLM_SKILL_COMPILER_BUDGET_TOKENS", 600),
 		RateLimitRPM:                       envInt("GLM_RATE_LIMIT_RPM", 120),
 		AuditRetentionDays:                 envInt("GLM_AUDIT_RETENTION_DAYS", 90),
 		ReasoningHiddenByDefault:           envBool("GLM_REASONING_HIDDEN_DEFAULT", true),
