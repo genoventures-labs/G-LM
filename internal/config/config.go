@@ -79,6 +79,12 @@ type Config struct {
 	MultiAgentStageTimeout             time.Duration
 	MultiAgentBudgetTokens             int
 	MultiAgentFailOpen                 bool
+	DecomposeEnabled                   bool
+	DecomposeMaxSubtasks               int
+	DecomposeMaxDepth                  int
+	DecomposeBudgetTokens              int
+	DecomposeStageTimeout              time.Duration
+	DecomposeFailOpen                  bool
 	IntentPreprocessorEnabled          bool
 	IntentAmbiguityThreshold           float64
 	DocumentOrchestrationEnabled       bool
@@ -203,6 +209,12 @@ func Load() Config {
 		MultiAgentStageTimeout:             time.Duration(envInt("GLM_MULTI_AGENT_STAGE_TIMEOUT_SECONDS", 45)) * time.Second,
 		MultiAgentBudgetTokens:             envInt("GLM_MULTI_AGENT_BUDGET_TOKENS", 700),
 		MultiAgentFailOpen:                 envBool("GLM_MULTI_AGENT_FAILOPEN", true),
+		DecomposeEnabled:                   envBool("GLM_DECOMPOSE_ENABLED", true),
+		DecomposeMaxSubtasks:               envInt("GLM_DECOMPOSE_MAX_SUBTASKS", 6),
+		DecomposeMaxDepth:                  envInt("GLM_DECOMPOSE_MAX_DEPTH", 1),
+		DecomposeBudgetTokens:              envInt("GLM_DECOMPOSE_BUDGET_TOKENS", 900),
+		DecomposeStageTimeout:              time.Duration(envInt("GLM_DECOMPOSE_STAGE_TIMEOUT_SECONDS", 40)) * time.Second,
+		DecomposeFailOpen:                  envBool("GLM_DECOMPOSE_FAILOPEN", true),
 		IntentPreprocessorEnabled:          envBool("GLM_INTENT_PREPROCESSOR_ENABLED", true),
 		IntentAmbiguityThreshold:           envFloat("GLM_INTENT_AMBIGUITY_THRESHOLD", 0.62),
 		DocumentOrchestrationEnabled:       envBool("GLM_DOCUMENT_ORCHESTRATION_ENABLED", true),

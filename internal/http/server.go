@@ -79,6 +79,9 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 	if cfg.MultiAgentStageTimeout <= 0 {
 		cfg.MultiAgentStageTimeout = 45 * time.Second
 	}
+	if cfg.DecomposeStageTimeout <= 0 {
+		cfg.DecomposeStageTimeout = 40 * time.Second
+	}
 	var controlClient orchestrator.InventoryControlClient
 	if len(control) > 0 {
 		controlClient = control[0]
@@ -145,6 +148,10 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 			MultiAgentMaxAgents:                cfg.MultiAgentMaxAgents,
 			MultiAgentMaxRounds:                cfg.MultiAgentMaxRounds,
 			MultiAgentBudgetTokens:             cfg.MultiAgentBudgetTokens,
+			DecomposeEnabled:                   cfg.DecomposeEnabled,
+			DecomposeMaxSubtasks:               cfg.DecomposeMaxSubtasks,
+			DecomposeMaxDepth:                  cfg.DecomposeMaxDepth,
+			DecomposeBudgetTokens:              cfg.DecomposeBudgetTokens,
 			MemoryAnchoredReasoningEnabled:     cfg.MemoryAnchoredReasoningEnabled,
 			MemoryAnchoredReasoningMaxAnchors:  cfg.MemoryAnchoredReasoningMaxAnchors,
 			MemoryAnchoredReasoningMinCoverage: cfg.MemoryAnchoredReasoningMinCoverage,
@@ -258,7 +265,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.1.6"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.2.0"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -319,6 +326,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "multi_agent") && !req.Reasoning.MultiAgentEnabled {
 		writeError(w, http.StatusBadRequest, "multi_agent_enabled must be true when reasoning.mode=multi_agent")
+		return
+	}
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "decompose") && !req.Reasoning.DecomposeEnabled {
+		writeError(w, http.StatusBadRequest, "decompose_enabled must be true when reasoning.mode=decompose")
 		return
 	}
 	if req.MaxTokens == nil && s.cfg.DefaultMaxTokens > 0 {
@@ -423,6 +434,11 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		case "multi_agent":
 			if !s.cfg.ReasoningPipelineEnabled || !s.cfg.MultiAgentEnabled {
 				writeError(w, http.StatusBadRequest, "multi_agent reasoning mode is disabled")
+				return
+			}
+		case "decompose":
+			if !s.cfg.ReasoningPipelineEnabled || !s.cfg.DecomposeEnabled {
+				writeError(w, http.StatusBadRequest, "decompose reasoning mode is disabled")
 				return
 			}
 		}
@@ -677,6 +693,36 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
+			} else if reasonMode == "decompose" && s.cfg.DecomposeFailOpen {
+				totReq := req
+				if totReq.Reasoning == nil {
+					totReq.Reasoning = &model.ReasoningOptions{}
+				}
+				totReq.Reasoning.Mode = "tot"
+				totReq.Reasoning.DecomposeEnabled = false
+				totCtx, cancelTot := context.WithTimeout(ctx, s.cfg.ReasoningStageTimeout)
+				resp, trace, err = s.reasoner.ExecuteToT(totCtx, execUpstream, totReq, policyRec, stateSnapshot)
+				cancelTot()
+				if err == nil {
+					reasoningTrace = &trace
+					w.Header().Set("X-GLM-Reasoning-Pipeline", "tot")
+					w.Header().Set("X-GLM-Reasoning-Branches", strconv.Itoa(len(trace.Branches)))
+					w.Header().Set("X-GLM-Decompose-Fallback", "tot")
+					outcome = outcome + "|decompose_fallback=tot|pipeline=tot"
+					if trace.ChosenModel != "" {
+						usedModel = trace.ChosenModel
+					}
+				} else {
+					log.Printf("decompose fail-open tot failed, falling back direct: %v", err)
+					directReq := req
+					directReq.Reasoning = nil
+					resp, err = execUpstream.ChatCompletions(ctx, directReq)
+					if err == nil {
+						w.Header().Set("X-GLM-Reasoning-Pipeline", "direct")
+						w.Header().Set("X-GLM-Decompose-Fallback", "direct")
+						outcome = outcome + "|decompose_fallback=direct"
+					}
+				}
 			} else if reasonMode == "mcts" && s.cfg.MCTSFailOpen {
 				totReq := req
 				if totReq.Reasoning == nil {
@@ -736,6 +782,19 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 						"|ma_consensus=" + trace.MultiAgent.Consensus
 				} else {
 					outcome = outcome + "|pipeline=multi_agent"
+				}
+			case "decompose":
+				w.Header().Set("X-GLM-Reasoning-Pipeline", "decompose")
+				if trace.Decompose != nil {
+					w.Header().Set("X-GLM-Decompose-Subtasks-Planned", strconv.Itoa(trace.Decompose.SubtasksPlanned))
+					w.Header().Set("X-GLM-Decompose-Subtasks-Executed", strconv.Itoa(trace.Decompose.SubtasksExecuted))
+					w.Header().Set("X-GLM-Decompose-Best-Score", formatFloat(trace.Decompose.BestScore))
+					outcome = outcome +
+						"|pipeline=decompose" +
+						"|decompose_subtasks=" + strconv.Itoa(trace.Decompose.SubtasksExecuted) +
+						"|decompose_best=" + formatFloat(trace.Decompose.BestScore)
+				} else {
+					outcome = outcome + "|pipeline=decompose"
 				}
 			case "mcts":
 				w.Header().Set("X-GLM-Reasoning-Pipeline", "mcts")
@@ -1778,6 +1837,16 @@ func (s *Server) resolveReasoningTimeout(req model.ChatCompletionRequest) time.D
 			if override < timeout {
 				timeout = override
 			}
+		}
+		if timeout < time.Second {
+			return time.Second
+		}
+		return timeout
+	}
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "decompose") {
+		timeout := s.cfg.DecomposeStageTimeout
+		if timeout <= 0 {
+			timeout = 40 * time.Second
 		}
 		if timeout < time.Second {
 			return time.Second

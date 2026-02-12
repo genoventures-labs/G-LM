@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.0] - 2026-02-12
+
+### Added
+- New reasoning mode `decompose` for ephemeral subtask decomposition with request-scoped execution.
+- New request-level decomposition controls in `reasoning`:
+  - `decompose_enabled`
+  - `decompose_max_subtasks`
+  - `decompose_max_depth`
+  - `decompose_budget_tokens`
+- New decomposition execution trace payload:
+  - `subtasks_planned`
+  - `subtasks_executed`
+  - `depth`
+  - `best_score`
+  - `fallback`
+- New decomposition runtime headers:
+  - `X-GLM-Decompose-Subtasks-Planned`
+  - `X-GLM-Decompose-Subtasks-Executed`
+  - `X-GLM-Decompose-Best-Score`
+  - `X-GLM-Decompose-Fallback`
+- New optional decomposition configuration surface:
+  - `GLM_DECOMPOSE_ENABLED`
+  - `GLM_DECOMPOSE_MAX_SUBTASKS`
+  - `GLM_DECOMPOSE_MAX_DEPTH`
+  - `GLM_DECOMPOSE_BUDGET_TOKENS`
+  - `GLM_DECOMPOSE_STAGE_TIMEOUT_SECONDS`
+  - `GLM_DECOMPOSE_FAILOPEN`
+
+### Changed
+- Reasoning pipeline now supports `reasoning.mode="decompose"` alongside `tot`, `mcts`, and `multi_agent`.
+- Decomposition is bounded to single-level (v1), executes subtasks sequentially on one selected model, and keeps artifacts request-scoped only.
+- Server fail-open flow now supports decomposition fallback (`decompose -> tot -> direct`) with explicit telemetry.
+- Cognition route remains backward-compatible; decomposition is opt-in through explicit reasoning mode only.
+
 ## [0.1.6] - 2026-02-11
 
 ### Added

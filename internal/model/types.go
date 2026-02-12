@@ -88,6 +88,10 @@ type ReasoningOptions struct {
 	Branches                int     `json:"branches,omitempty"`
 	SelfEvaluate            bool    `json:"self_evaluate,omitempty"`
 	DetectContradictions    bool    `json:"detect_contradictions,omitempty"`
+	DecomposeEnabled        bool    `json:"decompose_enabled,omitempty"`
+	DecomposeMaxSubtasks    int     `json:"decompose_max_subtasks,omitempty"`
+	DecomposeMaxDepth       int     `json:"decompose_max_depth,omitempty"`
+	DecomposeBudgetTokens   int     `json:"decompose_budget_tokens,omitempty"`
 	MCTSMaxRollouts         int     `json:"mcts_max_rollouts,omitempty"`
 	MCTSMaxDepth            int     `json:"mcts_max_depth,omitempty"`
 	MCTSExploration         float64 `json:"mcts_exploration,omitempty"`

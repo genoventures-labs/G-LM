@@ -1,6 +1,6 @@
 # G-LM
 
-[![Release](https://img.shields.io/badge/release-v0.1.6-0A66C2)](https://github.com/cassianwolfe/G-LM/releases)
+[![Release](https://img.shields.io/badge/release-v0.2.0-0A66C2)](https://github.com/cassianwolfe/G-LM/releases)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](https://go.dev/)
 [![API](https://img.shields.io/badge/api-OpenAI%20compatible-2B2D42)](#api-surface)
 [![Deployment](https://img.shields.io/badge/deployment-enterprise%20ready-1F6FEB)](#deployment)
@@ -20,7 +20,7 @@ It provides a single OpenAI-compatible API layer in front of model backends, wit
 
 - OpenAI-compatible runtime APIs (`/v1/chat/completions`, `/v1/models`, `/v1/cognition`).
 - Deterministic `model: "auto"` orchestration with JIT inventory management.
-- Reasoning modes: `tot`, `mcts`, `multi_agent` with fail-open handling.
+- Reasoning modes: `tot`, `mcts`, `multi_agent`, `decompose` with fail-open handling.
 - Document orchestration: chunking, summarization, cross-doc linking, synthesis context.
 - Session state and memory dynamics for continuity across turns.
 - Symbolic overlays (`assist` and `strict`) with compliance telemetry.
@@ -123,6 +123,15 @@ Optional for memory-anchored reasoning v1 (strict opt-in):
 - `GLM_MEMORY_ANCHORED_REASONING_MIN_COVERAGE=0.34`
 - `GLM_MEMORY_ANCHORED_REASONING_SCORE_BONUS=0.06`
 
+Optional for ephemeral subtask decomposition v1:
+
+- `GLM_DECOMPOSE_ENABLED=true`
+- `GLM_DECOMPOSE_MAX_SUBTASKS=6`
+- `GLM_DECOMPOSE_MAX_DEPTH=1` (v1 fixed to single-level decomposition)
+- `GLM_DECOMPOSE_BUDGET_TOKENS=900`
+- `GLM_DECOMPOSE_STAGE_TIMEOUT_SECONDS=40`
+- `GLM_DECOMPOSE_FAILOPEN=true`
+
 Optional for symbolic supervision nodes v1 (strict opt-in):
 
 - `GLM_SYMBOLIC_SUPERVISION_ENABLED=false`
@@ -186,7 +195,7 @@ Use `/admin/v1/tenants/{tenant_id}/audit-events` for governance and post-inciden
 
 ## Release and Compatibility
 
-- Current version: `v0.1.6`
+- Current version: `v0.2.0`
 - Contract style: OpenAI-compatible runtime surface
 - Backward compatibility goal: additive evolution of request options and headers
 

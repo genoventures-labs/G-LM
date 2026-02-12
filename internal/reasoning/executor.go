@@ -52,6 +52,10 @@ type Config struct {
 	MultiAgentMaxAgents                int
 	MultiAgentMaxRounds                int
 	MultiAgentBudgetTokens             int
+	DecomposeEnabled                   bool
+	DecomposeMaxSubtasks               int
+	DecomposeMaxDepth                  int
+	DecomposeBudgetTokens              int
 	MemoryAnchoredReasoningEnabled     bool
 	MemoryAnchoredReasoningMaxAnchors  int
 	MemoryAnchoredReasoningMinCoverage float64
@@ -100,6 +104,7 @@ type Trace struct {
 	SymbolicSupervision *SymbolicSupervisionTrace `json:"symbolic_supervision,omitempty"`
 	MCTS                *MCTSResult               `json:"mcts,omitempty"`
 	MultiAgent          *MultiAgentResult         `json:"multi_agent,omitempty"`
+	Decompose           *DecomposeResult          `json:"decompose,omitempty"`
 	Nodes               []Node                    `json:"nodes"`
 }
 
@@ -200,6 +205,14 @@ type MultiAgentResult struct {
 	Consensus string  `json:"consensus"`
 	Score     float64 `json:"score"`
 	Fallback  string  `json:"fallback,omitempty"`
+}
+
+type DecomposeResult struct {
+	SubtasksPlanned  int     `json:"subtasks_planned"`
+	SubtasksExecuted int     `json:"subtasks_executed"`
+	Depth            int     `json:"depth"`
+	BestScore        float64 `json:"best_score"`
+	Fallback         string  `json:"fallback,omitempty"`
 }
 
 func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
@@ -307,6 +320,15 @@ func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
 	if cfg.MultiAgentBudgetTokens <= 0 {
 		cfg.MultiAgentBudgetTokens = 700
 	}
+	if cfg.DecomposeMaxSubtasks <= 0 {
+		cfg.DecomposeMaxSubtasks = 6
+	}
+	if cfg.DecomposeMaxDepth <= 0 {
+		cfg.DecomposeMaxDepth = 1
+	}
+	if cfg.DecomposeBudgetTokens <= 0 {
+		cfg.DecomposeBudgetTokens = 900
+	}
 	if cfg.MemoryAnchoredReasoningMaxAnchors <= 0 {
 		cfg.MemoryAnchoredReasoningMaxAnchors = 3
 	}
@@ -340,6 +362,8 @@ func (e *Executor) ShouldExecute(req model.ChatCompletionRequest, st state.Cogni
 		return e.cfg.MCTSEnabled
 	case "multi_agent":
 		return e.cfg.MultiAgentEnabled
+	case "decompose":
+		return e.cfg.DecomposeEnabled
 	case "auto":
 		return st.TaskMode == "coding" || st.TaskMode == "general"
 	default:
@@ -359,6 +383,9 @@ func (e *Executor) Execute(
 	}
 	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "mcts") {
 		return e.executeMCTS(ctx, up, req, pol, st)
+	}
+	if req.Reasoning != nil && strings.EqualFold(strings.TrimSpace(req.Reasoning.Mode), "decompose") {
+		return e.executeDecompose(ctx, up, req, pol, st)
 	}
 	return e.executeToT(ctx, up, req, pol, st)
 }
@@ -391,6 +418,16 @@ func (e *Executor) ExecuteMultiAgent(
 	st state.CognitiveState,
 ) (model.ChatCompletionResponse, Trace, error) {
 	return e.executeMultiAgent(ctx, up, req, pol, st)
+}
+
+func (e *Executor) ExecuteDecompose(
+	ctx context.Context,
+	up Upstream,
+	req model.ChatCompletionRequest,
+	pol model.ModelPolicy,
+	st state.CognitiveState,
+) (model.ChatCompletionResponse, Trace, error) {
+	return e.executeDecompose(ctx, up, req, pol, st)
 }
 
 func (e *Executor) executeToT(

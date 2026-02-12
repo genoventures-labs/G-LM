@@ -87,6 +87,10 @@ func TestShouldExecute(t *testing.T) {
 		MultiAgentMaxAgents:    4,
 		MultiAgentMaxRounds:    2,
 		MultiAgentBudgetTokens: 1200,
+		DecomposeEnabled:       true,
+		DecomposeMaxSubtasks:   6,
+		DecomposeMaxDepth:      1,
+		DecomposeBudgetTokens:  900,
 	}, r)
 	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "tot"}}, state.CognitiveState{}) {
 		t.Fatal("expected tot mode to execute")
@@ -96,6 +100,9 @@ func TestShouldExecute(t *testing.T) {
 	}
 	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "multi_agent"}}, state.CognitiveState{}) {
 		t.Fatal("expected multi_agent mode to execute when enabled")
+	}
+	if !e.ShouldExecute(model.ChatCompletionRequest{Reasoning: &model.ReasoningOptions{Mode: "decompose"}}, state.CognitiveState{}) {
+		t.Fatal("expected decompose mode to execute when enabled")
 	}
 	if e.ShouldExecute(model.ChatCompletionRequest{}, state.CognitiveState{}) {
 		t.Fatal("expected nil reasoning to skip")

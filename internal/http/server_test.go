@@ -31,6 +31,7 @@ type fakeUpstream struct {
 	enableToolLoop bool
 	failMCTS       bool
 	failMultiAgent bool
+	failDecompose  bool
 	failDirect     bool
 	failToT        bool
 }
@@ -97,6 +98,9 @@ func (f *fakeUpstream) ChatCompletions(ctx context.Context, req model.ChatComple
 		}
 		if f.failMultiAgent && mode == "multi_agent" {
 			return model.ChatCompletionResponse{}, fmt.Errorf("multi-agent failure")
+		}
+		if f.failDecompose && mode == "decompose" {
+			return model.ChatCompletionResponse{}, fmt.Errorf("decompose failure")
 		}
 		if f.failToT && (mode == "tot" || mode == "pipeline") {
 			return model.ChatCompletionResponse{}, fmt.Errorf("tot failure")
@@ -209,6 +213,12 @@ func setupServerWithTenant(t *testing.T) (*Server, string, string, string, *fake
 		MultiAgentStageTimeout:           10 * time.Second,
 		MultiAgentBudgetTokens:           1200,
 		MultiAgentFailOpen:               true,
+		DecomposeEnabled:                 true,
+		DecomposeMaxSubtasks:             6,
+		DecomposeMaxDepth:                1,
+		DecomposeBudgetTokens:            900,
+		DecomposeStageTimeout:            10 * time.Second,
+		DecomposeFailOpen:                true,
 		IntentPreprocessorEnabled:        true,
 		IntentAmbiguityThreshold:         0.62,
 		DocumentOrchestrationEnabled:     true,
@@ -288,6 +298,12 @@ func setupServerCustom(t *testing.T, up *fakeUpstream, override func(*config.Con
 		MultiAgentStageTimeout:           10 * time.Second,
 		MultiAgentBudgetTokens:           1200,
 		MultiAgentFailOpen:               true,
+		DecomposeEnabled:                 true,
+		DecomposeMaxSubtasks:             6,
+		DecomposeMaxDepth:                1,
+		DecomposeBudgetTokens:            900,
+		DecomposeStageTimeout:            10 * time.Second,
+		DecomposeFailOpen:                true,
 		IntentPreprocessorEnabled:        true,
 		IntentAmbiguityThreshold:         0.62,
 		DocumentOrchestrationEnabled:     true,
@@ -1425,6 +1441,112 @@ func TestCognitionRouteMultiAgentReasoning(t *testing.T) {
 	}
 	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "multi_agent" {
 		t.Fatalf("expected multi_agent pipeline, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
+	}
+}
+
+func TestReasoningDecomposeHeaders(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"mode":                   "decompose",
+			"decompose_enabled":      true,
+			"decompose_max_depth":    2,
+			"decompose_max_subtasks": 4,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Plan rollout and controls"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "decompose" {
+		t.Fatalf("expected decompose pipeline header, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
+	}
+	if rr.Header().Get("X-GLM-Decompose-Subtasks-Planned") == "" {
+		t.Fatal("expected decompose planned subtasks header")
+	}
+	if rr.Header().Get("X-GLM-Decompose-Subtasks-Executed") == "" {
+		t.Fatal("expected decompose executed subtasks header")
+	}
+	if rr.Header().Get("X-GLM-Decompose-Best-Score") == "" {
+		t.Fatal("expected decompose best score header")
+	}
+}
+
+func TestReasoningDecomposeDisabledMode(t *testing.T) {
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, nil, func(cfg *config.Config) {
+		cfg.DecomposeEnabled = false
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"mode":              "decompose",
+			"decompose_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Plan rollout and controls"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestReasoningDecomposeFailOpenToToT(t *testing.T) {
+	up := &fakeUpstream{
+		models:        []string{"mistral:7b", "qwen3:4b"},
+		failDecompose: true,
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, nil)
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"mode":              "decompose",
+			"decompose_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Plan rollout and controls"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Decompose-Fallback") != "tot" {
+		t.Fatalf("expected decompose fallback tot, got %q", rr.Header().Get("X-GLM-Decompose-Fallback"))
+	}
+}
+
+func TestCognitionRouteDecomposeReasoning(t *testing.T) {
+	srv, _, runtimeKey, _ := setupServer(t)
+	body := map[string]any{
+		"task":  "reasoning",
+		"input": "Compare two options and decide",
+		"reasoning": map[string]any{
+			"mode":              "decompose",
+			"decompose_enabled": true,
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/cognition", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Reasoning-Pipeline") != "decompose" {
+		t.Fatalf("expected decompose pipeline, got %q", rr.Header().Get("X-GLM-Reasoning-Pipeline"))
 	}
 }
 

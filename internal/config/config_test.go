@@ -213,6 +213,64 @@ func TestLoadMCTSV2FromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadDecomposeDefaults(t *testing.T) {
+	t.Setenv("GLM_DECOMPOSE_ENABLED", "")
+	t.Setenv("GLM_DECOMPOSE_MAX_SUBTASKS", "")
+	t.Setenv("GLM_DECOMPOSE_MAX_DEPTH", "")
+	t.Setenv("GLM_DECOMPOSE_BUDGET_TOKENS", "")
+	t.Setenv("GLM_DECOMPOSE_STAGE_TIMEOUT_SECONDS", "")
+	t.Setenv("GLM_DECOMPOSE_FAILOPEN", "")
+
+	cfg := Load()
+	if !cfg.DecomposeEnabled {
+		t.Fatal("expected decompose enabled by default")
+	}
+	if cfg.DecomposeMaxSubtasks != 6 {
+		t.Fatalf("expected max subtasks default 6, got %d", cfg.DecomposeMaxSubtasks)
+	}
+	if cfg.DecomposeMaxDepth != 1 {
+		t.Fatalf("expected max depth default 1, got %d", cfg.DecomposeMaxDepth)
+	}
+	if cfg.DecomposeBudgetTokens != 900 {
+		t.Fatalf("expected budget tokens default 900, got %d", cfg.DecomposeBudgetTokens)
+	}
+	if cfg.DecomposeStageTimeout.Seconds() != 40 {
+		t.Fatalf("expected stage timeout default 40s, got %v", cfg.DecomposeStageTimeout)
+	}
+	if !cfg.DecomposeFailOpen {
+		t.Fatal("expected decompose fail-open enabled by default")
+	}
+}
+
+func TestLoadDecomposeFromEnv(t *testing.T) {
+	t.Setenv("GLM_DECOMPOSE_ENABLED", "false")
+	t.Setenv("GLM_DECOMPOSE_MAX_SUBTASKS", "4")
+	t.Setenv("GLM_DECOMPOSE_MAX_DEPTH", "2")
+	t.Setenv("GLM_DECOMPOSE_BUDGET_TOKENS", "700")
+	t.Setenv("GLM_DECOMPOSE_STAGE_TIMEOUT_SECONDS", "25")
+	t.Setenv("GLM_DECOMPOSE_FAILOPEN", "false")
+
+	cfg := Load()
+	if cfg.DecomposeEnabled {
+		t.Fatal("expected decompose disabled from env")
+	}
+	if cfg.DecomposeMaxSubtasks != 4 {
+		t.Fatalf("expected max subtasks 4, got %d", cfg.DecomposeMaxSubtasks)
+	}
+	if cfg.DecomposeMaxDepth != 2 {
+		t.Fatalf("expected max depth 2, got %d", cfg.DecomposeMaxDepth)
+	}
+	if cfg.DecomposeBudgetTokens != 700 {
+		t.Fatalf("expected budget tokens 700, got %d", cfg.DecomposeBudgetTokens)
+	}
+	if cfg.DecomposeStageTimeout.Seconds() != 25 {
+		t.Fatalf("expected stage timeout 25s, got %v", cfg.DecomposeStageTimeout)
+	}
+	if cfg.DecomposeFailOpen {
+		t.Fatal("expected decompose fail-open disabled from env")
+	}
+}
+
 func TestLoadMetaReflectionDefaults(t *testing.T) {
 	t.Setenv("GLM_META_REFLECTION_ENABLED", "")
 	t.Setenv("GLM_META_REFLECTION_MAX_PASSES", "")
