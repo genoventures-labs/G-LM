@@ -566,3 +566,45 @@ func TestLoadGeometryAndWorldviewFromEnv(t *testing.T) {
 		t.Fatalf("expected worldview fusion stages 3, got %d", cfg.WorldviewFusionStages)
 	}
 }
+
+func TestLoadConstraintBreakingAndAdversarialDefaults(t *testing.T) {
+	t.Setenv("GLM_CONSTRAINT_BREAKING_ENABLED", "")
+	t.Setenv("GLM_CONSTRAINT_BREAKING_LEVEL", "")
+	t.Setenv("GLM_ADVERSARIAL_SELF_PLAY_ENABLED", "")
+	t.Setenv("GLM_ADVERSARIAL_ROUNDS", "")
+
+	cfg := Load()
+	if cfg.ConstraintBreakingEnabled {
+		t.Fatal("expected constraint breaking disabled by default")
+	}
+	if cfg.ConstraintBreakingLevel != "low" {
+		t.Fatalf("expected constraint level low, got %q", cfg.ConstraintBreakingLevel)
+	}
+	if cfg.AdversarialSelfPlayEnabled {
+		t.Fatal("expected adversarial self-play disabled by default")
+	}
+	if cfg.AdversarialRounds != 2 {
+		t.Fatalf("expected adversarial rounds 2, got %d", cfg.AdversarialRounds)
+	}
+}
+
+func TestLoadConstraintBreakingAndAdversarialFromEnv(t *testing.T) {
+	t.Setenv("GLM_CONSTRAINT_BREAKING_ENABLED", "true")
+	t.Setenv("GLM_CONSTRAINT_BREAKING_LEVEL", "medium")
+	t.Setenv("GLM_ADVERSARIAL_SELF_PLAY_ENABLED", "true")
+	t.Setenv("GLM_ADVERSARIAL_ROUNDS", "4")
+
+	cfg := Load()
+	if !cfg.ConstraintBreakingEnabled {
+		t.Fatal("expected constraint breaking enabled from env")
+	}
+	if cfg.ConstraintBreakingLevel != "medium" {
+		t.Fatalf("expected constraint level medium, got %q", cfg.ConstraintBreakingLevel)
+	}
+	if !cfg.AdversarialSelfPlayEnabled {
+		t.Fatal("expected adversarial self-play enabled from env")
+	}
+	if cfg.AdversarialRounds != 4 {
+		t.Fatalf("expected adversarial rounds 4, got %d", cfg.AdversarialRounds)
+	}
+}

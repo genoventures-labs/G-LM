@@ -2317,6 +2317,81 @@ func TestCognitivePolicyBlocksWorldviewFusion(t *testing.T) {
 	}
 }
 
+func TestAdversarialSelfPlayHeaders(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{"base answer", "round one revised", "round two revised"},
+	}
+	srv, adminKey, runtimeKey, tenantID, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.AdversarialSelfPlayEnabled = true
+		cfg.AdversarialRounds = 2
+	})
+	policyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenantID+"/cognitive-policy", bytes.NewBufferString(`{"status":"active","allow_adversarial_self_play":true,"allow_constraint_breaking":true,"max_constraint_breaking_severity":"high"}`))
+	policyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	policyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(policyRR, policyReq)
+	if policyRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 policy upsert, got %d: %s", policyRR.Code, policyRR.Body.String())
+	}
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"adversarial_self_play_enabled": true,
+			"adversarial_rounds":            2,
+			"constraint_breaking_enabled":   true,
+			"constraint_breaking_level":     "low",
+		},
+		"messages": []map[string]string{{"role": "user", "content": "harden this plan"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Adversarial-Self-Play") != "applied" {
+		t.Fatalf("expected adversarial self-play applied, got %q", rr.Header().Get("X-GLM-Adversarial-Self-Play"))
+	}
+	if rr.Header().Get("X-GLM-Adversarial-Rounds") != "2" {
+		t.Fatalf("expected adversarial rounds 2, got %q", rr.Header().Get("X-GLM-Adversarial-Rounds"))
+	}
+	if rr.Header().Get("X-GLM-Constraint-Breaking") != "enabled" {
+		t.Fatalf("expected constraint breaking enabled, got %q", rr.Header().Get("X-GLM-Constraint-Breaking"))
+	}
+	if rr.Header().Get("X-GLM-Constraint-Breaking-Level") != "low" {
+		t.Fatalf("expected constraint level low, got %q", rr.Header().Get("X-GLM-Constraint-Breaking-Level"))
+	}
+}
+
+func TestCognitivePolicyBlocksAdversarialSelfPlay(t *testing.T) {
+	srv, adminKey, runtimeKey, tenantID, _ := setupServerWithTenant(t)
+	policyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenantID+"/cognitive-policy", bytes.NewBufferString(`{"status":"active","allow_adversarial_self_play":false}`))
+	policyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	policyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(policyRR, policyReq)
+	if policyRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 policy upsert, got %d: %s", policyRR.Code, policyRR.Body.String())
+	}
+
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"adversarial_self_play_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestSymbolicOverlayV3Headers(t *testing.T) {
 	srv, _, runtimeKey, _ := setupServer(t)
 	body := map[string]any{

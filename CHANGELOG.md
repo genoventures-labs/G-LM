@@ -27,10 +27,28 @@ All notable changes to this project are documented in this file.
   - `GLM_GEOMETRY_MODE`
   - `GLM_WORLDVIEW_FUSION_ENABLED`
   - `GLM_WORLDVIEW_FUSION_STAGES`
+- Deliberate constraint breaking controls:
+  - `reasoning.constraint_breaking_enabled`
+  - `reasoning.constraint_breaking_level` (`low|medium|high`)
+- Adversarial self-play controls:
+  - `reasoning.adversarial_self_play_enabled`
+  - `reasoning.adversarial_rounds`
+  - `reasoning.adversarial_roles`
+- New runtime telemetry headers:
+  - `X-GLM-Constraint-Breaking`
+  - `X-GLM-Constraint-Breaking-Level`
+  - `X-GLM-Adversarial-Self-Play`
+  - `X-GLM-Adversarial-Rounds`
+- New optional config surface:
+  - `GLM_CONSTRAINT_BREAKING_ENABLED`
+  - `GLM_CONSTRAINT_BREAKING_LEVEL`
+  - `GLM_ADVERSARIAL_SELF_PLAY_ENABLED`
+  - `GLM_ADVERSARIAL_ROUNDS`
 
 ### Changed
 - Reasoning traces for `tot`, `mcts`, `multi_agent`, and `decompose` now include geometry/fusion metadata when enabled.
 - Cognitive policy gating now blocks unauthorized activation of shape transform and worldview fusion.
+- Cognitive policy gating now blocks unauthorized activation of constraint breaking and adversarial self-play (including severity bound checks).
 - Default behavior remains backward-compatible and opt-in for geometry/fusion stages.
 
 ## [0.7.0] - 2026-02-12

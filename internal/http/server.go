@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mike/cognitive-llm/internal/adversarial"
 	"github.com/mike/cognitive-llm/internal/audit"
 	"github.com/mike/cognitive-llm/internal/auth"
 	"github.com/mike/cognitive-llm/internal/config"
@@ -62,6 +63,7 @@ type Server struct {
 	symbolic *symbolicoverlay.Service
 	reindex  *contextindex.Service
 	compiler *skillcompiler.Service
+	adverse  *adversarial.Service
 	tools    *toolcalling.Client
 	state    *state.Manager
 	upstream upstream
@@ -214,6 +216,13 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 			Enabled:      cfg.SkillCompilerEnabled,
 			Profile:      cfg.SkillCompilerProfile,
 			BudgetTokens: cfg.SkillCompilerBudgetTokens,
+		}),
+		adverse: adversarial.New(adversarial.Config{
+			Enabled:                   cfg.AdversarialSelfPlayEnabled,
+			DefaultRounds:             cfg.AdversarialRounds,
+			MaxRounds:                 6,
+			ConstraintBreakingEnabled: cfg.ConstraintBreakingEnabled,
+			ConstraintBreakingLevel:   cfg.ConstraintBreakingLevel,
 		}),
 		tools:    toolcalling.New(cfg.ToolServerBaseURL, cfg.ToolServerAPIKey, cfg.ToolServerClientID, time.Duration(cfg.ToolCallingTimeoutSeconds)*time.Second),
 		state:    state.NewManager(cfg.StateHistoryWindow),
@@ -979,6 +988,39 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "upstream completion failed")
 		return
 	}
+	adversarialStatus := "disabled"
+	adversarialRounds := 0
+	constraintStatus := "disabled"
+	constraintLevel := "none"
+	if req.Reasoning != nil {
+		if req.Reasoning.ConstraintBreakingEnabled {
+			constraintStatus = "enabled"
+			constraintLevel = normalizeConstraintLevel(req.Reasoning.ConstraintBreakingLevel)
+		}
+		if req.Reasoning.AdversarialSelfPlayEnabled {
+			adversarialStatus = "enabled"
+			res, advErr := s.adverse.Execute(ctx, execUpstream, req, resp, usedModel)
+			if advErr != nil {
+				adversarialStatus = "error"
+				log.Printf("adversarial self-play failed: %v", advErr)
+			} else if res.Applied {
+				resp = res.Output
+				adversarialStatus = "applied"
+				adversarialRounds = res.Rounds
+			} else {
+				adversarialStatus = "skipped"
+			}
+		}
+	}
+	w.Header().Set("X-GLM-Constraint-Breaking", constraintStatus)
+	w.Header().Set("X-GLM-Constraint-Breaking-Level", constraintLevel)
+	w.Header().Set("X-GLM-Adversarial-Self-Play", adversarialStatus)
+	w.Header().Set("X-GLM-Adversarial-Rounds", strconv.Itoa(adversarialRounds))
+	outcome = outcome +
+		"|constraint_breaking=" + constraintStatus +
+		"|constraint_breaking_level=" + constraintLevel +
+		"|adversarial_self_play=" + adversarialStatus +
+		"|adversarial_rounds=" + strconv.Itoa(adversarialRounds)
 	if s.meta.ShouldRun(req) {
 		metaResult, metaErr := safeMetaEvaluate(s.meta, req, resp, reasoningTrace, stateSnapshot)
 		if metaErr != nil {
@@ -2198,6 +2240,19 @@ func enforceCognitivePolicy(req *model.ChatCompletionRequest, cp model.Cognitive
 		if req.Reasoning.WorldviewFusionEnabled && !cp.AllowWorldviewFusion {
 			return "blocked_worldview_fusion", fmt.Errorf("worldview fusion is not allowed by cognitive policy")
 		}
+		if req.Reasoning.ConstraintBreakingEnabled && !cp.AllowConstraintBreaking {
+			return "blocked_constraint_breaking", fmt.Errorf("constraint breaking is not allowed by cognitive policy")
+		}
+		if req.Reasoning.ConstraintBreakingEnabled {
+			level := normalizeConstraintLevel(req.Reasoning.ConstraintBreakingLevel)
+			maxAllowed := normalizeConstraintLevel(cp.MaxConstraintBreakingSeverity)
+			if constraintLevelRank(level) > constraintLevelRank(maxAllowed) {
+				return "blocked_constraint_breaking_level", fmt.Errorf("constraint breaking level %q exceeds policy maximum %q", level, maxAllowed)
+			}
+		}
+		if req.Reasoning.AdversarialSelfPlayEnabled && !cp.AllowAdversarialSelfPlay {
+			return "blocked_adversarial_self_play", fmt.Errorf("adversarial self-play is not allowed by cognitive policy")
+		}
 	}
 	if len(req.Tools) > 0 {
 		for _, tool := range req.Tools {
@@ -2223,6 +2278,28 @@ func containsFold(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeConstraintLevel(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(v))
+	default:
+		return "none"
+	}
+}
+
+func constraintLevelRank(v string) int {
+	switch normalizeConstraintLevel(v) {
+	case "low":
+		return 1
+	case "medium":
+		return 2
+	case "high":
+		return 3
+	default:
+		return 0
+	}
 }
 
 func safeMetaEvaluate(

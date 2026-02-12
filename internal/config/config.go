@@ -145,6 +145,10 @@ type Config struct {
 	GeometryMode                       string
 	WorldviewFusionEnabled             bool
 	WorldviewFusionStages              int
+	ConstraintBreakingEnabled          bool
+	ConstraintBreakingLevel            string
+	AdversarialSelfPlayEnabled         bool
+	AdversarialRounds                  int
 	RateLimitRPM                       int
 	AuditRetentionDays                 int
 	ReasoningHiddenByDefault           bool
@@ -291,6 +295,10 @@ func Load() Config {
 		GeometryMode:                       env("GLM_GEOMETRY_MODE", "linear"),
 		WorldviewFusionEnabled:             envBool("GLM_WORLDVIEW_FUSION_ENABLED", false),
 		WorldviewFusionStages:              envInt("GLM_WORLDVIEW_FUSION_STAGES", 2),
+		ConstraintBreakingEnabled:          envBool("GLM_CONSTRAINT_BREAKING_ENABLED", false),
+		ConstraintBreakingLevel:            env("GLM_CONSTRAINT_BREAKING_LEVEL", "low"),
+		AdversarialSelfPlayEnabled:         envBool("GLM_ADVERSARIAL_SELF_PLAY_ENABLED", false),
+		AdversarialRounds:                  envInt("GLM_ADVERSARIAL_ROUNDS", 2),
 		RateLimitRPM:                       envInt("GLM_RATE_LIMIT_RPM", 120),
 		AuditRetentionDays:                 envInt("GLM_AUDIT_RETENTION_DAYS", 90),
 		ReasoningHiddenByDefault:           envBool("GLM_REASONING_HIDDEN_DEFAULT", true),
