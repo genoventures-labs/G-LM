@@ -43,13 +43,15 @@ func (s *Service) ResolveCognitivePolicy(ctx context.Context, tenantID string) m
 
 func defaultCognitivePolicy(tenantID string) model.CognitivePolicy {
 	return normalizeCognitivePolicy(model.CognitivePolicy{
-		TenantID:            tenantID,
-		Status:              "active",
-		Version:             "v1",
-		AllowContextReindex: true,
-		AllowSkillCompiler:  true,
-		ToolAllowlist:       nil,
-		ToolDenylist:        nil,
+		TenantID:             tenantID,
+		Status:               "active",
+		Version:              "v1",
+		AllowWorldviewFusion: true,
+		AllowShapeTransform:  true,
+		AllowContextReindex:  true,
+		AllowSkillCompiler:   true,
+		ToolAllowlist:        nil,
+		ToolDenylist:         nil,
 	})
 }
 

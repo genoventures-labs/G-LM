@@ -524,3 +524,45 @@ func TestLoadContextReindexAndSkillCompilerFromEnv(t *testing.T) {
 		t.Fatalf("expected skill compiler budget 750, got %d", cfg.SkillCompilerBudgetTokens)
 	}
 }
+
+func TestLoadGeometryAndWorldviewDefaults(t *testing.T) {
+	t.Setenv("GLM_SHAPE_TRANSFORM_ENABLED", "")
+	t.Setenv("GLM_GEOMETRY_MODE", "")
+	t.Setenv("GLM_WORLDVIEW_FUSION_ENABLED", "")
+	t.Setenv("GLM_WORLDVIEW_FUSION_STAGES", "")
+
+	cfg := Load()
+	if cfg.ShapeTransformEnabled {
+		t.Fatal("expected shape transform disabled by default")
+	}
+	if cfg.GeometryMode != "linear" {
+		t.Fatalf("expected geometry mode linear, got %q", cfg.GeometryMode)
+	}
+	if cfg.WorldviewFusionEnabled {
+		t.Fatal("expected worldview fusion disabled by default")
+	}
+	if cfg.WorldviewFusionStages != 2 {
+		t.Fatalf("expected worldview fusion stages 2, got %d", cfg.WorldviewFusionStages)
+	}
+}
+
+func TestLoadGeometryAndWorldviewFromEnv(t *testing.T) {
+	t.Setenv("GLM_SHAPE_TRANSFORM_ENABLED", "true")
+	t.Setenv("GLM_GEOMETRY_MODE", "mesh")
+	t.Setenv("GLM_WORLDVIEW_FUSION_ENABLED", "true")
+	t.Setenv("GLM_WORLDVIEW_FUSION_STAGES", "3")
+
+	cfg := Load()
+	if !cfg.ShapeTransformEnabled {
+		t.Fatal("expected shape transform enabled from env")
+	}
+	if cfg.GeometryMode != "mesh" {
+		t.Fatalf("expected geometry mode mesh, got %q", cfg.GeometryMode)
+	}
+	if !cfg.WorldviewFusionEnabled {
+		t.Fatal("expected worldview fusion enabled from env")
+	}
+	if cfg.WorldviewFusionStages != 3 {
+		t.Fatalf("expected worldview fusion stages 3, got %d", cfg.WorldviewFusionStages)
+	}
+}

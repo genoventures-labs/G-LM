@@ -2249,6 +2249,74 @@ func TestCognitivePolicyBlocksContextReindex(t *testing.T) {
 	}
 }
 
+func TestGeometryAndWorldviewFusionHeaders(t *testing.T) {
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, nil, func(cfg *config.Config) {
+		cfg.ShapeTransformEnabled = true
+		cfg.GeometryMode = "mesh"
+		cfg.WorldviewFusionEnabled = true
+		cfg.WorldviewFusionStages = 3
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"mode":                     "tot",
+			"shape_transform_enabled":  true,
+			"geometry_mode":            "mesh",
+			"worldview_fusion_enabled": true,
+			"worldview_fusion_stages":  3,
+			"worldview_profiles":       []string{"risk_first", "performance_first"},
+		},
+		"messages": []map[string]string{{"role": "user", "content": "compare rollout options"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Geometry-Mode") != "mesh" {
+		t.Fatalf("expected geometry mode mesh, got %q", rr.Header().Get("X-GLM-Geometry-Mode"))
+	}
+	if rr.Header().Get("X-GLM-Geometry-Steps") == "" {
+		t.Fatal("expected geometry steps header")
+	}
+	if rr.Header().Get("X-GLM-Worldview-Fusion") != "applied" {
+		t.Fatalf("expected worldview fusion applied, got %q", rr.Header().Get("X-GLM-Worldview-Fusion"))
+	}
+	if rr.Header().Get("X-GLM-Worldview-Stages") != "3" {
+		t.Fatalf("expected worldview stages 3, got %q", rr.Header().Get("X-GLM-Worldview-Stages"))
+	}
+}
+
+func TestCognitivePolicyBlocksWorldviewFusion(t *testing.T) {
+	srv, adminKey, runtimeKey, tenantID, _ := setupServerWithTenant(t)
+	policyReq := httptest.NewRequest(http.MethodPost, "/admin/v1/tenants/"+tenantID+"/cognitive-policy", bytes.NewBufferString(`{"status":"active","allow_worldview_fusion":false}`))
+	policyReq.Header.Set("Authorization", "Bearer "+adminKey)
+	policyRR := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(policyRR, policyReq)
+	if policyRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 policy upsert, got %d: %s", policyRR.Code, policyRR.Body.String())
+	}
+
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"worldview_fusion_enabled": true,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestSymbolicOverlayV3Headers(t *testing.T) {
 	srv, _, runtimeKey, _ := setupServer(t)
 	body := map[string]any{

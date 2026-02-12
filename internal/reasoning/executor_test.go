@@ -153,6 +153,48 @@ func TestExecutorMCTSModeProducesTrace(t *testing.T) {
 	}
 }
 
+func TestExecutorAppliesGeometryAndFusionTrace(t *testing.T) {
+	r := orchestrator.NewRouter("qwen3-8b-instruct-Q4_K_M", []string{"qwen3:8b"}, "qwen3:4b")
+	e := NewExecutor(Config{
+		Enabled:                true,
+		DefaultBranches:        3,
+		MaxBranches:            5,
+		ShapeTransformEnabled:  true,
+		GeometryMode:           "mesh",
+		WorldviewFusionEnabled: true,
+		WorldviewFusionStages:  3,
+	}, r)
+	up := &fakeUpstream{}
+	req := model.ChatCompletionRequest{
+		Model: "auto",
+		Reasoning: &model.ReasoningOptions{
+			Mode:                   "tot",
+			ShapeTransformEnabled:  true,
+			GeometryMode:           "mesh",
+			WorldviewFusionEnabled: true,
+			WorldviewFusionStages:  3,
+			WorldviewProfiles:      []string{"risk_first", "performance_first"},
+		},
+		Messages: []model.Message{{Role: "user", Content: "Implement and compare approaches"}},
+	}
+	pol := model.ModelPolicy{AllowedModels: []string{"qwen3:4b", "mistral:7b"}, PrimaryModel: "qwen3:4b"}
+	st := state.CognitiveState{TaskMode: "coding"}
+
+	_, trace, err := e.Execute(context.Background(), up, req, pol, st)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if trace.GeometryMode != "mesh" {
+		t.Fatalf("expected geometry mode mesh, got %q", trace.GeometryMode)
+	}
+	if len(trace.GeometryPath) == 0 {
+		t.Fatal("expected geometry path")
+	}
+	if len(trace.FusionStageScores) != 3 {
+		t.Fatalf("expected 3 fusion stages, got %d", len(trace.FusionStageScores))
+	}
+}
+
 type mctsFailingUpstream struct{}
 
 func (m *mctsFailingUpstream) ListModels(ctx context.Context) (model.ModelListResponse, error) {

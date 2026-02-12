@@ -184,6 +184,7 @@ func (e *Executor) executeDecompose(
 		Depth:            1,
 		BestScore:        pruned[0].EvaluationScore,
 	}
+	e.applyGeometryAndFusion(&trace, req)
 	return finalResp, trace, nil
 }
 

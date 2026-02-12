@@ -157,6 +157,10 @@ func NewServer(cfg config.Config, st store.Store, upstream upstream, control ...
 			DecomposeMaxSubtasks:               cfg.DecomposeMaxSubtasks,
 			DecomposeMaxDepth:                  cfg.DecomposeMaxDepth,
 			DecomposeBudgetTokens:              cfg.DecomposeBudgetTokens,
+			ShapeTransformEnabled:              cfg.ShapeTransformEnabled,
+			GeometryMode:                       cfg.GeometryMode,
+			WorldviewFusionEnabled:             cfg.WorldviewFusionEnabled,
+			WorldviewFusionStages:              cfg.WorldviewFusionStages,
 			MemoryAnchoredReasoningEnabled:     cfg.MemoryAnchoredReasoningEnabled,
 			MemoryAnchoredReasoningMaxAnchors:  cfg.MemoryAnchoredReasoningMaxAnchors,
 			MemoryAnchoredReasoningMinCoverage: cfg.MemoryAnchoredReasoningMinCoverage,
@@ -279,7 +283,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.7.0"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.8.0"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -932,6 +936,22 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-GLM-Reasoning-Memory-Anchors-Used", strconv.Itoa(reasoningTrace.MemoryAnchor.AnchorsUsed))
 		w.Header().Set("X-GLM-Reasoning-Memory-Coverage-Avg", formatFloat(reasoningTrace.MemoryAnchor.CoverageAvg))
 		w.Header().Set("X-GLM-Reasoning-Memory-Bonus-Avg", formatFloat(reasoningTrace.MemoryAnchor.BonusAvg))
+	}
+	if reasoningTrace != nil {
+		if strings.TrimSpace(reasoningTrace.GeometryMode) != "" {
+			w.Header().Set("X-GLM-Geometry-Mode", reasoningTrace.GeometryMode)
+			w.Header().Set("X-GLM-Geometry-Steps", strconv.Itoa(len(reasoningTrace.GeometryPath)))
+			outcome = outcome + "|geometry_mode=" + reasoningTrace.GeometryMode + "|geometry_steps=" + strconv.Itoa(len(reasoningTrace.GeometryPath))
+		}
+		if len(reasoningTrace.FusionStageScores) > 0 {
+			w.Header().Set("X-GLM-Worldview-Fusion", "applied")
+			w.Header().Set("X-GLM-Worldview-Stages", strconv.Itoa(len(reasoningTrace.FusionStageScores)))
+			outcome = outcome + "|worldview_fusion=applied|worldview_stages=" + strconv.Itoa(len(reasoningTrace.FusionStageScores))
+		} else if req.Reasoning != nil && req.Reasoning.WorldviewFusionEnabled {
+			w.Header().Set("X-GLM-Worldview-Fusion", "skipped")
+			w.Header().Set("X-GLM-Worldview-Stages", "0")
+			outcome = outcome + "|worldview_fusion=skipped|worldview_stages=0"
+		}
 	}
 	if err != nil && policyRec.FallbackModel != "" && policyRec.FallbackModel != req.Model {
 		fallbackReq := req
@@ -2171,6 +2191,12 @@ func enforceCognitivePolicy(req *model.ChatCompletionRequest, cp model.Cognitive
 		}
 		if req.Reasoning.SkillCompilerEnabled && !cp.AllowSkillCompiler {
 			return "blocked_skill_compiler", fmt.Errorf("skill compiler is not allowed by cognitive policy")
+		}
+		if req.Reasoning.ShapeTransformEnabled && !cp.AllowShapeTransform {
+			return "blocked_shape_transform", fmt.Errorf("shape transform is not allowed by cognitive policy")
+		}
+		if req.Reasoning.WorldviewFusionEnabled && !cp.AllowWorldviewFusion {
+			return "blocked_worldview_fusion", fmt.Errorf("worldview fusion is not allowed by cognitive policy")
 		}
 	}
 	if len(req.Tools) > 0 {

@@ -27,6 +27,12 @@ func TestResolveCognitivePolicyDefault(t *testing.T) {
 	if !got.AllowSkillCompiler {
 		t.Fatal("expected allow_skill_compiler default true")
 	}
+	if !got.AllowShapeTransform {
+		t.Fatal("expected allow_shape_transform default true")
+	}
+	if !got.AllowWorldviewFusion {
+		t.Fatal("expected allow_worldview_fusion default true")
+	}
 }
 
 func TestResolveCognitivePolicyNormalized(t *testing.T) {

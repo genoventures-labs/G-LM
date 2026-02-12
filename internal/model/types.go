@@ -123,6 +123,11 @@ type ReasoningOptions struct {
 	SkillCompilerEnabled      bool     `json:"skill_compiler_enabled,omitempty"`
 	SkillCompilerProfile      string   `json:"skill_compiler_profile,omitempty"`
 	SkillCompilerBudgetTokens int      `json:"skill_compiler_budget_tokens,omitempty"`
+	GeometryMode              string   `json:"geometry_mode,omitempty"`
+	ShapeTransformEnabled     bool     `json:"shape_transform_enabled,omitempty"`
+	WorldviewFusionEnabled    bool     `json:"worldview_fusion_enabled,omitempty"`
+	WorldviewFusionStages     int      `json:"worldview_fusion_stages,omitempty"`
+	WorldviewProfiles         []string `json:"worldview_profiles,omitempty"`
 }
 
 type DocumentInput struct {

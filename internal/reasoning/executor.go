@@ -56,6 +56,10 @@ type Config struct {
 	DecomposeMaxSubtasks               int
 	DecomposeMaxDepth                  int
 	DecomposeBudgetTokens              int
+	ShapeTransformEnabled              bool
+	GeometryMode                       string
+	WorldviewFusionEnabled             bool
+	WorldviewFusionStages              int
 	MemoryAnchoredReasoningEnabled     bool
 	MemoryAnchoredReasoningMaxAnchors  int
 	MemoryAnchoredReasoningMinCoverage float64
@@ -105,6 +109,10 @@ type Trace struct {
 	MCTS                *MCTSResult               `json:"mcts,omitempty"`
 	MultiAgent          *MultiAgentResult         `json:"multi_agent,omitempty"`
 	Decompose           *DecomposeResult          `json:"decompose,omitempty"`
+	GeometryMode        string                    `json:"geometry_mode,omitempty"`
+	GeometryPath        []string                  `json:"geometry_path,omitempty"`
+	FusionStageScores   []float64                 `json:"fusion_stage_scores,omitempty"`
+	FusionConflictMap   []string                  `json:"fusion_conflict_map,omitempty"`
 	Nodes               []Node                    `json:"nodes"`
 }
 
@@ -328,6 +336,13 @@ func NewExecutor(cfg Config, router *orchestrator.Router) *Executor {
 	}
 	if cfg.DecomposeBudgetTokens <= 0 {
 		cfg.DecomposeBudgetTokens = 900
+	}
+	cfg.GeometryMode = normalizeGeometryMode(cfg.GeometryMode)
+	if cfg.WorldviewFusionStages <= 0 {
+		cfg.WorldviewFusionStages = 2
+	}
+	if cfg.WorldviewFusionStages > 5 {
+		cfg.WorldviewFusionStages = 5
 	}
 	if cfg.MemoryAnchoredReasoningMaxAnchors <= 0 {
 		cfg.MemoryAnchoredReasoningMaxAnchors = 3
@@ -560,6 +575,7 @@ func (e *Executor) executeToT(
 	}
 	allNodes = append(allNodes, synthNode)
 	trace.Nodes = allNodes
+	e.applyGeometryAndFusion(&trace, req)
 	return finalResp, trace, nil
 }
 

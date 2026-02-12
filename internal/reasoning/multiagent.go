@@ -237,6 +237,7 @@ func (e *Executor) executeMultiAgent(
 		Consensus: consensus,
 		Score:     synthCandidates[0].Score,
 	}
+	e.applyGeometryAndFusion(&trace, req)
 	return finalResp, trace, nil
 }
 

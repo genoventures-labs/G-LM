@@ -141,6 +141,10 @@ type Config struct {
 	SkillCompilerEnabled               bool
 	SkillCompilerProfile               string
 	SkillCompilerBudgetTokens          int
+	ShapeTransformEnabled              bool
+	GeometryMode                       string
+	WorldviewFusionEnabled             bool
+	WorldviewFusionStages              int
 	RateLimitRPM                       int
 	AuditRetentionDays                 int
 	ReasoningHiddenByDefault           bool
@@ -283,6 +287,10 @@ func Load() Config {
 		SkillCompilerEnabled:               envBool("GLM_SKILL_COMPILER_ENABLED", false),
 		SkillCompilerProfile:               env("GLM_SKILL_COMPILER_PROFILE", "safe"),
 		SkillCompilerBudgetTokens:          envInt("GLM_SKILL_COMPILER_BUDGET_TOKENS", 600),
+		ShapeTransformEnabled:              envBool("GLM_SHAPE_TRANSFORM_ENABLED", false),
+		GeometryMode:                       env("GLM_GEOMETRY_MODE", "linear"),
+		WorldviewFusionEnabled:             envBool("GLM_WORLDVIEW_FUSION_ENABLED", false),
+		WorldviewFusionStages:              envInt("GLM_WORLDVIEW_FUSION_STAGES", 2),
 		RateLimitRPM:                       envInt("GLM_RATE_LIMIT_RPM", 120),
 		AuditRetentionDays:                 envInt("GLM_AUDIT_RETENTION_DAYS", 90),
 		ReasoningHiddenByDefault:           envBool("GLM_REASONING_HIDDEN_DEFAULT", true),

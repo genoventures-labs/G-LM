@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.8.0] - 2026-02-12
+
+### Added
+- Cognitive shape transformation request controls:
+  - `reasoning.shape_transform_enabled`
+  - `reasoning.geometry_mode` (`linear|tree|mesh|adversarial_pair|synthesis_first`)
+- Multi-stage worldview fusion request controls:
+  - `reasoning.worldview_fusion_enabled`
+  - `reasoning.worldview_fusion_stages`
+  - `reasoning.worldview_profiles` (`risk_first|cost_first|safety_first|performance_first`)
+- Geometry/fusion trace payload fields:
+  - `geometry_mode`
+  - `geometry_path`
+  - `fusion_stage_scores`
+  - `fusion_conflict_map`
+- New runtime telemetry headers:
+  - `X-GLM-Geometry-Mode`
+  - `X-GLM-Geometry-Steps`
+  - `X-GLM-Worldview-Fusion`
+  - `X-GLM-Worldview-Stages`
+- New optional config surface:
+  - `GLM_SHAPE_TRANSFORM_ENABLED`
+  - `GLM_GEOMETRY_MODE`
+  - `GLM_WORLDVIEW_FUSION_ENABLED`
+  - `GLM_WORLDVIEW_FUSION_STAGES`
+
+### Changed
+- Reasoning traces for `tot`, `mcts`, `multi_agent`, and `decompose` now include geometry/fusion metadata when enabled.
+- Cognitive policy gating now blocks unauthorized activation of shape transform and worldview fusion.
+- Default behavior remains backward-compatible and opt-in for geometry/fusion stages.
+
 ## [0.7.0] - 2026-02-12
 
 ### Added

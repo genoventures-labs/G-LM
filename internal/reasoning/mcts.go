@@ -258,6 +258,7 @@ func (e *Executor) executeMCTS(
 	if len(candidates) == 1 && len(candidates[0].Path) == 0 {
 		trace.MCTS.Fallback = "direct_baseline"
 	}
+	e.applyGeometryAndFusion(&trace, req)
 	return finalResp, trace, nil
 }
 
