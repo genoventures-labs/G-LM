@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.0] - 2026-02-12
+
+### Added
+- Self-alignment loop telemetry headers:
+  - `X-GLM-Self-Alignment`
+  - `X-GLM-Self-Alignment-Passes`
+  - `X-GLM-Self-Alignment-Reason`
+- New optional self-alignment configuration surface:
+  - `GLM_SELF_ALIGNMENT_ENABLED`
+  - `GLM_SELF_ALIGNMENT_MAX_PASSES`
+- Request-level self-alignment aliases in `reasoning`:
+  - `self_alignment_enabled`
+  - `self_alignment_max_passes`
+
+### Changed
+- Meta reflection now supports bounded multi-pass revise-and-reevaluate loops (up to configured budget) instead of a single forced pass.
+- Reflection controls remain backward-compatible; existing `meta_reflection_*` options continue to work while self-alignment aliases map to the same loop.
+- Audit outcome tags now include explicit self-alignment status, reason, and pass count.
+
 ## [0.2.0] - 2026-02-12
 
 ### Added

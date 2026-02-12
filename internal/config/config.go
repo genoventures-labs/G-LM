@@ -129,6 +129,8 @@ type Config struct {
 	MetaReflectionEnabled              bool
 	MetaReflectionMaxPasses            int
 	MetaReflectionTriggerDecisions     []string
+	SelfAlignmentEnabled               bool
+	SelfAlignmentMaxPasses             int
 	RateLimitRPM                       int
 	AuditRetentionDays                 int
 	ReasoningHiddenByDefault           bool
@@ -259,6 +261,8 @@ func Load() Config {
 		MetaReflectionEnabled:              envBool("GLM_META_REFLECTION_ENABLED", false),
 		MetaReflectionMaxPasses:            envInt("GLM_META_REFLECTION_MAX_PASSES", 1),
 		MetaReflectionTriggerDecisions:     splitCSV(env("GLM_META_REFLECTION_TRIGGER_DECISIONS", "caution,reject")),
+		SelfAlignmentEnabled:               envBool("GLM_SELF_ALIGNMENT_ENABLED", false),
+		SelfAlignmentMaxPasses:             envInt("GLM_SELF_ALIGNMENT_MAX_PASSES", 2),
 		RateLimitRPM:                       envInt("GLM_RATE_LIMIT_RPM", 120),
 		AuditRetentionDays:                 envInt("GLM_AUDIT_RETENTION_DAYS", 90),
 		ReasoningHiddenByDefault:           envBool("GLM_REASONING_HIDDEN_DEFAULT", true),

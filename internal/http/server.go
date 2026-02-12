@@ -265,7 +265,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) version(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.2.0"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "glm-api", "version": "v0.3.0"})
 }
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -902,6 +902,9 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-GLM-Meta-Reflection", "error")
 			w.Header().Set("X-GLM-Meta-Reflection-Passes", "0")
 			w.Header().Set("X-GLM-Meta-Reflection-Reason", "upstream_error")
+			w.Header().Set("X-GLM-Self-Alignment", "error")
+			w.Header().Set("X-GLM-Self-Alignment-Passes", "0")
+			w.Header().Set("X-GLM-Self-Alignment-Reason", "upstream_error")
 		} else {
 			reflectionStatus := "disabled"
 			reflectionPasses := 0
@@ -916,23 +919,43 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 						reflectionStatus = "skipped"
 						reflectionReason = "budget_guard"
 					} else {
-						reflectionPasses = 1
 						reflectionReason = "decision_trigger"
-						revisionReq := buildMetaReflectionRequest(req, usedModel, resp, metaResult)
-						revisedResp, reviseErr := execUpstream.ChatCompletions(ctx, revisionReq)
-						if reviseErr != nil {
-							reflectionStatus = "error"
-							reflectionReason = "upstream_error"
-						} else {
+						currentResp := resp
+						currentMeta := metaResult
+						appliedAny := false
+						for pass := 1; pass <= maxPasses; pass++ {
+							reflectionPasses = pass
+							revisionReq := buildMetaReflectionRequest(req, usedModel, currentResp, currentMeta)
+							revisedResp, reviseErr := execUpstream.ChatCompletions(ctx, revisionReq)
+							if reviseErr != nil {
+								reflectionStatus = "error"
+								reflectionReason = "upstream_error"
+								break
+							}
 							revisedMeta, revisedMetaErr := safeMetaEvaluate(s.meta, req, revisedResp, reasoningTrace, stateSnapshot)
 							if revisedMetaErr != nil {
 								reflectionStatus = "error"
 								reflectionReason = "upstream_error"
-							} else if shouldAdoptReflected(metaResult, revisedMeta) {
-								resp = revisedResp
-								finalMeta = revisedMeta
-								reflectionStatus = "applied"
+								break
 							}
+							if !shouldAdoptReflected(currentMeta, revisedMeta) {
+								if appliedAny {
+									reflectionStatus = "applied"
+									reflectionReason = "no_further_improvement"
+								}
+								break
+							}
+							currentResp = revisedResp
+							currentMeta = revisedMeta
+							appliedAny = true
+							reflectionStatus = "applied"
+							if !shouldTriggerReflection(currentMeta, req, s.cfg) {
+								break
+							}
+						}
+						if appliedAny {
+							resp = currentResp
+							finalMeta = currentMeta
 						}
 					}
 				}
@@ -946,6 +969,9 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-GLM-Meta-Reflection", reflectionStatus)
 			w.Header().Set("X-GLM-Meta-Reflection-Passes", strconv.Itoa(reflectionPasses))
 			w.Header().Set("X-GLM-Meta-Reflection-Reason", reflectionReason)
+			w.Header().Set("X-GLM-Self-Alignment", reflectionStatus)
+			w.Header().Set("X-GLM-Self-Alignment-Passes", strconv.Itoa(reflectionPasses))
+			w.Header().Set("X-GLM-Self-Alignment-Reason", reflectionReason)
 			outcome = outcome +
 				"|meta_decision=" + finalMeta.Decision +
 				"|meta_conf=" + formatFloat(finalMeta.Confidence) +
@@ -953,7 +979,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				"|meta_profile=" + finalMeta.Profile +
 				"|meta_reflection=" + reflectionStatus +
 				"|meta_reflection_reason=" + reflectionReason +
-				"|meta_reflection_passes=" + strconv.Itoa(reflectionPasses)
+				"|meta_reflection_passes=" + strconv.Itoa(reflectionPasses) +
+				"|self_alignment=" + reflectionStatus +
+				"|self_alignment_reason=" + reflectionReason +
+				"|self_alignment_passes=" + strconv.Itoa(reflectionPasses)
 		}
 	}
 	if symbolicRequested && symbolicMode == "strict" && symbolicApplied {
@@ -1078,22 +1107,28 @@ func mctsV2EnabledForRequest(req model.ChatCompletionRequest, cfg config.Config)
 }
 
 func metaReflectionEnabledForRequest(req model.ChatCompletionRequest, cfg config.Config) bool {
-	if req.Reasoning != nil && req.Reasoning.MetaReflectionEnabled {
+	if req.Reasoning != nil && (req.Reasoning.MetaReflectionEnabled || req.Reasoning.SelfAlignmentEnabled) {
 		return true
 	}
-	return cfg.MetaReflectionEnabled
+	return cfg.MetaReflectionEnabled || cfg.SelfAlignmentEnabled
 }
 
 func metaReflectionPassesForRequest(req model.ChatCompletionRequest, cfg config.Config) int {
 	passes := cfg.MetaReflectionMaxPasses
+	if cfg.SelfAlignmentMaxPasses > 0 {
+		passes = cfg.SelfAlignmentMaxPasses
+	}
 	if req.Reasoning != nil && req.Reasoning.MetaReflectionMaxPasses > 0 {
 		passes = req.Reasoning.MetaReflectionMaxPasses
 	}
-	if passes < 1 {
-		passes = 1
+	if req.Reasoning != nil && req.Reasoning.SelfAlignmentMaxPasses > 0 {
+		passes = req.Reasoning.SelfAlignmentMaxPasses
 	}
-	if passes > 1 {
-		passes = 1
+	if passes < 0 {
+		passes = 0
+	}
+	if passes > 4 {
+		passes = 4
 	}
 	return passes
 }

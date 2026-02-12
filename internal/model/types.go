@@ -108,6 +108,8 @@ type ReasoningOptions struct {
 	MetaProfile             string  `json:"meta_profile,omitempty"`
 	MetaReflectionEnabled   bool    `json:"meta_reflection_enabled,omitempty"`
 	MetaReflectionMaxPasses int     `json:"meta_reflection_max_passes,omitempty"`
+	SelfAlignmentEnabled    bool    `json:"self_alignment_enabled,omitempty"`
+	SelfAlignmentMaxPasses  int     `json:"self_alignment_max_passes,omitempty"`
 }
 
 type DocumentInput struct {

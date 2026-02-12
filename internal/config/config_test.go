@@ -307,6 +307,32 @@ func TestLoadMetaReflectionFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadSelfAlignmentDefaults(t *testing.T) {
+	t.Setenv("GLM_SELF_ALIGNMENT_ENABLED", "")
+	t.Setenv("GLM_SELF_ALIGNMENT_MAX_PASSES", "")
+
+	cfg := Load()
+	if cfg.SelfAlignmentEnabled {
+		t.Fatal("expected self-alignment disabled by default")
+	}
+	if cfg.SelfAlignmentMaxPasses != 2 {
+		t.Fatalf("expected self-alignment max passes default 2, got %d", cfg.SelfAlignmentMaxPasses)
+	}
+}
+
+func TestLoadSelfAlignmentFromEnv(t *testing.T) {
+	t.Setenv("GLM_SELF_ALIGNMENT_ENABLED", "true")
+	t.Setenv("GLM_SELF_ALIGNMENT_MAX_PASSES", "3")
+
+	cfg := Load()
+	if !cfg.SelfAlignmentEnabled {
+		t.Fatal("expected self-alignment enabled from env")
+	}
+	if cfg.SelfAlignmentMaxPasses != 3 {
+		t.Fatalf("expected self-alignment max passes 3, got %d", cfg.SelfAlignmentMaxPasses)
+	}
+}
+
 func TestLoadMemoryAnchoredReasoningDefaults(t *testing.T) {
 	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_ENABLED", "")
 	t.Setenv("GLM_MEMORY_ANCHORED_REASONING_MAX_ANCHORS", "")

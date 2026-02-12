@@ -242,6 +242,11 @@ func setupServerWithTenant(t *testing.T) (*Server, string, string, string, *fake
 		MetaReasoningDefaultProfile:      "default",
 		MetaReasoningAcceptThreshold:     0.72,
 		MetaReasoningStrictThreshold:     0.82,
+		MetaReflectionEnabled:            false,
+		MetaReflectionMaxPasses:          1,
+		MetaReflectionTriggerDecisions:   []string{"caution", "reject"},
+		SelfAlignmentEnabled:             false,
+		SelfAlignmentMaxPasses:           2,
 	}
 	srv := NewServer(cfg, st, up)
 	a := auth.NewService(st)
@@ -327,6 +332,11 @@ func setupServerCustom(t *testing.T, up *fakeUpstream, override func(*config.Con
 		MetaReasoningDefaultProfile:      "default",
 		MetaReasoningAcceptThreshold:     0.72,
 		MetaReasoningStrictThreshold:     0.82,
+		MetaReflectionEnabled:            false,
+		MetaReflectionMaxPasses:          1,
+		MetaReflectionTriggerDecisions:   []string{"caution", "reject"},
+		SelfAlignmentEnabled:             false,
+		SelfAlignmentMaxPasses:           2,
 	}
 	if override != nil {
 		override(&cfg)
@@ -1791,6 +1801,90 @@ func TestMetaReflectionUpstreamErrorReturnsOriginal(t *testing.T) {
 	got := strings.TrimSpace(out.Choices[0].Message.Content)
 	if got != "maybe unclear perhaps" {
 		t.Fatalf("expected original response retained after reflection error, got %q", got)
+	}
+}
+
+func TestMetaReflectionMultiPassSelfAlignment(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{
+			"maybe unclear perhaps",
+			"Plan with staged rollout and rollback checks [1], but maybe details vary by environment.",
+			"Concrete answer with clear assumptions, checks, and risks handled explicitly across rollout stages.",
+		},
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.MetaReasoningEnabled = true
+		cfg.MetaReflectionEnabled = true
+		cfg.MetaReflectionMaxPasses = 2
+		cfg.MetaReflectionTriggerDecisions = []string{"caution", "reject"}
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"meta_enabled":               true,
+			"meta_reflection_enabled":    true,
+			"meta_reflection_max_passes": 2,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if up.chatCalls < 3 {
+		t.Fatalf("expected two reflection passes after initial response, got %d upstream calls", up.chatCalls)
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection") != "applied" {
+		t.Fatalf("expected reflection applied, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection-Passes") != "2" {
+		t.Fatalf("expected two reflection passes, got %q", rr.Header().Get("X-GLM-Meta-Reflection-Passes"))
+	}
+	if rr.Header().Get("X-GLM-Self-Alignment") != "applied" {
+		t.Fatalf("expected self-alignment applied, got %q", rr.Header().Get("X-GLM-Self-Alignment"))
+	}
+	if rr.Header().Get("X-GLM-Self-Alignment-Passes") != "2" {
+		t.Fatalf("expected self-alignment passes=2, got %q", rr.Header().Get("X-GLM-Self-Alignment-Passes"))
+	}
+}
+
+func TestSelfAlignmentRequestAliasEnablesReflection(t *testing.T) {
+	up := &fakeUpstream{
+		models:      []string{"mistral:7b"},
+		responseSeq: []string{"maybe unclear perhaps", "Concrete answer with clear assumptions and checks."},
+	}
+	srv, _, runtimeKey, _, _ := setupServerCustom(t, up, func(cfg *config.Config) {
+		cfg.MetaReasoningEnabled = true
+		cfg.MetaReflectionEnabled = false
+		cfg.SelfAlignmentEnabled = false
+	})
+	body := map[string]any{
+		"model": "mistral:7b",
+		"reasoning": map[string]any{
+			"meta_enabled":              true,
+			"self_alignment_enabled":    true,
+			"self_alignment_max_passes": 1,
+		},
+		"messages": []map[string]string{{"role": "user", "content": "Provide a recommendation"}},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+runtimeKey)
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("X-GLM-Self-Alignment") != "applied" {
+		t.Fatalf("expected self-alignment applied, got %q", rr.Header().Get("X-GLM-Self-Alignment"))
+	}
+	if rr.Header().Get("X-GLM-Meta-Reflection") != "applied" {
+		t.Fatalf("expected meta reflection applied via self-alignment alias, got %q", rr.Header().Get("X-GLM-Meta-Reflection"))
 	}
 }
 
